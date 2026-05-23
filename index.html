@@ -146,6 +146,68 @@
 import * as THREE from 'https://esm.sh/three@0.160.0';
 
 /* =============================================================
+   LAPLACE FIELD — RELAXATION SOLVER
+   -------------------------------------------------------------
+   El campo escalar φ(x,y) obedece ∇²φ = 0 en el interior y
+   condiciones Dirichlet en las celdas que el usuario pinta.
+   En equilibrio cada φᵢⱼ = ¼ (suma de 4 vecinos): la versión
+   discreta del laplaciano nulo en una malla regular.
+   Iteramos Gauss–Seidel con sobre-relajación (SOR):
+        φᵢⱼ ← φᵢⱼ + ω · (¼·Σvecinos − φᵢⱼ)
+   con ω ≈ 1.88 para acelerar la convergencia.
+   ============================================================= */
+
+const NX = 200, NY = 120;
+const N  = NX * NY;
+const phi    = new Float32Array(N);   // valor actual del campo
+const fixed  = new Uint8Array(N);     // 1 si la celda es Dirichlet
+const phiFix = new Float32Array(N);   // valor objetivo de las fijas
+
+const OMEGA = 1.88;
+let iterPerFrame = 8;
+
+function iterate(times) {
+  for (let it = 0; it < times; it++) {
+    // Pass A: celdas con (i+j) impar (en filas pares empieza en i=1; en impares, i=2)
+    for (let j = 1; j < NY - 1; j++) {
+      const row = j * NX;
+      const start = 1 + (j & 1);
+      for (let i = start; i < NX - 1; i += 2) {
+        const k = row + i;
+        if (fixed[k]) continue;
+        const avg = 0.25 * (phi[k-1] + phi[k+1] + phi[k-NX] + phi[k+NX]);
+        phi[k] += OMEGA * (avg - phi[k]);
+      }
+    }
+    // Pass B: celdas con (i+j) par
+    for (let j = 1; j < NY - 1; j++) {
+      const row = j * NX;
+      const start = 2 - (j & 1);
+      for (let i = start; i < NX - 1; i += 2) {
+        const k = row + i;
+        if (fixed[k]) continue;
+        const avg = 0.25 * (phi[k-1] + phi[k+1] + phi[k-NX] + phi[k+NX]);
+        phi[k] += OMEGA * (avg - phi[k]);
+      }
+    }
+    // Bordes Neumann (∂φ/∂n = 0): copiar la fila adyacente al final de cada
+    // iteración para que la pasada siguiente vea una frontera coherente.
+    for (let i = 0; i < NX; i++) {
+      phi[i]              = phi[i + NX];
+      phi[(NY-1)*NX + i]  = phi[(NY-2)*NX + i];
+    }
+    for (let j = 0; j < NY; j++) {
+      phi[j*NX]           = phi[j*NX + 1];
+      phi[j*NX + NX-1]    = phi[j*NX + NX-2];
+    }
+  }
+}
+
+function resetField() {
+  phi.fill(0); fixed.fill(0); phiFix.fill(0);
+}
+
+/* =============================================================
    THREE.JS SCENE
    Cámara isométrica fija con oscilación lenta para "respiración"
    visual sin entrar en conflicto con la interacción de pintado.
@@ -176,9 +238,8 @@ scene.add(rim);
 
 /* ---- Heightfield (plano por ahora, animado en commits posteriores) -- */
 const PLANE_W = 13, PLANE_H = 7.8;
-const NX_GEOM = 200, NY_GEOM = 120;
 
-const surfaceGeom = new THREE.PlaneGeometry(PLANE_W, PLANE_H, NX_GEOM-1, NY_GEOM-1);
+const surfaceGeom = new THREE.PlaneGeometry(PLANE_W, PLANE_H, NX-1, NY-1);
 surfaceGeom.rotateX(-Math.PI/2);   // plano en XZ, altura en Y
 surfaceGeom.attributes.position.setUsage(THREE.DynamicDrawUsage);
 surfaceGeom.attributes.normal.setUsage(THREE.DynamicDrawUsage);
@@ -226,6 +287,8 @@ function frame() {
   camera.position.z = CAM_BASE.z + Math.cos(now * 0.11) * 0.35;
   camera.position.y = CAM_BASE.y + Math.sin(now * 0.07) * 0.12;
   camera.lookAt(0, 0, 0);
+
+  iterate(iterPerFrame);
 
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
