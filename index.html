@@ -236,16 +236,23 @@ const rim = new THREE.DirectionalLight(0x6088c8, 0.25);
 rim.position.set(-6, 4, -5);
 scene.add(rim);
 
-/* ---- Heightfield (plano por ahora, animado en commits posteriores) -- */
+/* ---- Heightfield ---------------------------------------------------- */
 const PLANE_W = 13, PLANE_H = 7.8;
+const HEIGHT_SCALE = 1.05;   // φ → altura
 
 const surfaceGeom = new THREE.PlaneGeometry(PLANE_W, PLANE_H, NX-1, NY-1);
 surfaceGeom.rotateX(-Math.PI/2);   // plano en XZ, altura en Y
-surfaceGeom.attributes.position.setUsage(THREE.DynamicDrawUsage);
-surfaceGeom.attributes.normal.setUsage(THREE.DynamicDrawUsage);
+const posAttr = surfaceGeom.attributes.position;
+posAttr.setUsage(THREE.DynamicDrawUsage);
+const colAttr = new THREE.BufferAttribute(new Float32Array(3*N), 3);
+colAttr.setUsage(THREE.DynamicDrawUsage);
+surfaceGeom.setAttribute('color', colAttr);
+const normAttr = surfaceGeom.attributes.normal;
+normAttr.setUsage(THREE.DynamicDrawUsage);
 
 const surfaceMat = new THREE.MeshStandardMaterial({
-  color:0x3a2418, metalness:0.18, roughness:0.62,
+  vertexColors:true, flatShading:false,
+  metalness:0.18, roughness:0.62,
 });
 const surface = new THREE.Mesh(surfaceGeom, surfaceMat);
 scene.add(surface);
@@ -256,6 +263,84 @@ const pickGeom = new THREE.PlaneGeometry(PLANE_W, PLANE_H);
 pickGeom.rotateX(-Math.PI/2);
 const pickMesh = new THREE.Mesh(pickGeom, new THREE.MeshBasicMaterial({visible:false}));
 scene.add(pickMesh);
+
+/* ---- Paleta cálida (gradiente) ------------------------------
+   φ ≤ −1 → azul noche
+   φ =  0 → marrón cálido tenue
+   φ ≈ .5 → ámbar (#f0a95c)
+   φ ≥  1 → crema
+   Interpolación lineal a tramos entre 5 stops.              */
+const STOPS = [
+  { t:-1.0, c:[0.040, 0.082, 0.188] },
+  { t:-0.5, c:[0.125, 0.110, 0.180] },
+  { t: 0.0, c:[0.220, 0.140, 0.092] },
+  { t: 0.5, c:[0.942, 0.660, 0.360] },   // f0a95c
+  { t: 1.0, c:[0.957, 0.892, 0.760] },   // crema
+];
+function sampleColor(t, out) {
+  if (t <= STOPS[0].t) { out[0]=STOPS[0].c[0]; out[1]=STOPS[0].c[1]; out[2]=STOPS[0].c[2]; return; }
+  if (t >= STOPS[STOPS.length-1].t) { const c=STOPS[STOPS.length-1].c; out[0]=c[0]; out[1]=c[1]; out[2]=c[2]; return; }
+  for (let s = 0; s < STOPS.length-1; s++) {
+    const a = STOPS[s], b = STOPS[s+1];
+    if (t >= a.t && t <= b.t) {
+      const u = (t - a.t) / (b.t - a.t);
+      out[0] = a.c[0] + (b.c[0]-a.c[0])*u;
+      out[1] = a.c[1] + (b.c[1]-a.c[1])*u;
+      out[2] = a.c[2] + (b.c[2]-a.c[2])*u;
+      return;
+    }
+  }
+}
+
+/* ---- Update del heightfield --------------------------------
+   - Y del vértice = φ * HEIGHT_SCALE (clamp anti-divergencia).
+   - Color por valor de φ.
+   - Normales analíticas a partir del gradiente discreto:
+        n = normalize( (-HS·∂φ/∂x, 1, -HS·∂φ/∂y) )
+     Mucho más rápido que computeVertexNormals.
+   Recorrido del buffer: i (X) rápido, j (Z) lento, k = j*NX + i.   */
+const posArr  = posAttr.array;
+const colArr  = colAttr.array;
+const normArr = normAttr.array;
+const tmpRGB  = [0,0,0];
+const dx = PLANE_W / (NX-1);
+const dy = PLANE_H / (NY-1);
+
+function updateSurface() {
+  // 1) alturas + colores
+  for (let k = 0; k < N; k++) {
+    let v = phi[k];
+    if (v >  3) v =  3;     // safety clamp
+    if (v < -3) v = -3;
+    posArr[3*k + 1] = v * HEIGHT_SCALE;
+    sampleColor(v, tmpRGB);
+    colArr[3*k]   = tmpRGB[0];
+    colArr[3*k+1] = tmpRGB[1];
+    colArr[3*k+2] = tmpRGB[2];
+  }
+  // 2) normales analíticas
+  for (let j = 0; j < NY; j++) {
+    const jm = j > 0      ? j-1 : 0;
+    const jp = j < NY-1   ? j+1 : NY-1;
+    for (let i = 0; i < NX; i++) {
+      const im = i > 0    ? i-1 : 0;
+      const ip = i < NX-1 ? i+1 : NX-1;
+      const dfx = (phi[j*NX + ip] - phi[j*NX + im]) / ((ip-im) * dx);
+      const dfy = (phi[jp*NX + i] - phi[jm*NX + i]) / ((jp-jm) * dy);
+      const nx = -HEIGHT_SCALE * dfx;
+      const ny =  1.0;
+      const nz = -HEIGHT_SCALE * dfy;
+      const inv = 1.0 / Math.hypot(nx, ny, nz);
+      const k = j*NX + i;
+      normArr[3*k]   = nx * inv;
+      normArr[3*k+1] = ny * inv;
+      normArr[3*k+2] = nz * inv;
+    }
+  }
+  posAttr.needsUpdate  = true;
+  colAttr.needsUpdate  = true;
+  normAttr.needsUpdate = true;
+}
 
 // Anillo decorativo bajo la superficie — refuerza el aire de instrumento.
 {
@@ -279,6 +364,26 @@ function onResize() {
 addEventListener('resize', onResize);
 onResize();
 
+// Estado inicial: dos polos suaves para que se vea algo al cargar.
+(function seed(){
+  const setBlob = (ci, cj, sign) => {
+    const j0 = Math.max(1, cj-7), j1 = Math.min(NY-2, cj+7);
+    const i0 = Math.max(1, ci-7), i1 = Math.min(NX-2, ci+7);
+    for (let j = j0; j <= j1; j++)
+      for (let i = i0; i <= i1; i++){
+        const d2 = (i-ci)*(i-ci)+(j-cj)*(j-cj);
+        if (d2 > 49) continue;
+        const w = Math.exp(-d2/22);
+        const k = j*NX + i;
+        phiFix[k] = sign * w;
+        phi[k]    = phiFix[k];
+        fixed[k]  = w > 0.4 ? 1 : 0;
+      }
+  };
+  setBlob( 60, 60, +1);
+  setBlob(140, 60, -1);
+})();
+
 function frame() {
   const now = performance.now() / 1000;
 
@@ -289,6 +394,7 @@ function frame() {
   camera.lookAt(0, 0, 0);
 
   iterate(iterPerFrame);
+  updateSurface();
 
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
