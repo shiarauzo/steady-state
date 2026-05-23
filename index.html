@@ -743,6 +743,10 @@ function paintBrush(fi, fj, sign) {
 
 document.getElementById('reset').onclick = () => resetField();
 
+const iterInput = document.getElementById('iter');
+const iterVal   = document.getElementById('iterVal');
+iterInput.oninput = e => { iterPerFrame = +e.target.value; iterVal.textContent = iterPerFrame; };
+
 /* =============================================================
    RESIZE + LOOP
    ============================================================= */
