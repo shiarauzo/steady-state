@@ -205,6 +205,7 @@ function iterate(times) {
 
 function resetField() {
   phi.fill(0); fixed.fill(0); phiFix.fill(0);
+  for (let i = 0; i < N_PART; i++) spawnParticle(i);
 }
 
 /* =============================================================
@@ -353,6 +354,195 @@ function updateSurface() {
 }
 
 /* =============================================================
+   PARTÍCULAS: fluyen siguiendo −∇φ sobre la superficie 3D.
+   Cada partícula lleva un ring buffer de TRAIL_LEN posiciones para
+   dibujar una estela con decay exponencial; se renderiza con glow
+   aditivo (shader propio sobre THREE.Points).
+   ============================================================= */
+const N_PART    = 2000;
+const TRAIL_LEN = 8;
+let showParticles = true;
+
+const partI    = new Float32Array(N_PART);
+const partJ    = new Float32Array(N_PART);
+const partLife = new Float32Array(N_PART);
+const partMaxLife = new Float32Array(N_PART);
+const partPos      = new Float32Array(N_PART * 3);
+const partAlphaArr = new Float32Array(N_PART);
+
+const trailPos   = new Float32Array(N_PART * TRAIL_LEN * 3);
+const trailAlpha = new Float32Array(N_PART * TRAIL_LEN);
+const trailHead  = new Uint8Array(N_PART);
+
+function spawnParticle(idx) {
+  partI[idx] = 1 + Math.random() * (NX - 3);
+  partJ[idx] = 1 + Math.random() * (NY - 3);
+  partLife[idx] = 0;
+  partMaxLife[idx] = 1.2 + Math.random() * 2.4;
+  // inicializa el trail entero en la posición de spawn para evitar rayas
+  // largas al respawnear cerca del borde
+  const wx = (partI[idx]/(NX-1) - 0.5) * PLANE_W;
+  const wz = (partJ[idx]/(NY-1) - 0.5) * PLANE_H;
+  for (let t = 0; t < TRAIL_LEN; t++) {
+    const off = (idx * TRAIL_LEN + t) * 3;
+    trailPos[off]   = wx;
+    trailPos[off+1] = 0;
+    trailPos[off+2] = wz;
+    trailAlpha[idx * TRAIL_LEN + t] = 0;
+  }
+  trailHead[idx] = 0;
+}
+for (let i = 0; i < N_PART; i++) spawnParticle(i);
+
+const partGeom = new THREE.BufferGeometry();
+partGeom.setAttribute('position', new THREE.BufferAttribute(partPos, 3));
+partGeom.setAttribute('aAlpha',   new THREE.BufferAttribute(partAlphaArr, 1));
+partGeom.attributes.position.setUsage(THREE.DynamicDrawUsage);
+partGeom.attributes.aAlpha.setUsage(THREE.DynamicDrawUsage);
+
+const partMat = new THREE.ShaderMaterial({
+  uniforms:{ uColor:{ value: new THREE.Color(0xf0a95c) } },
+  vertexShader:`
+    attribute float aAlpha;
+    varying float vA;
+    void main(){
+      vA = aAlpha;
+      vec4 mv = modelViewMatrix * vec4(position,1.0);
+      gl_PointSize = 6.5 * aAlpha * (260.0 / -mv.z);
+      gl_Position = projectionMatrix * mv;
+    }`,
+  fragmentShader:`
+    varying float vA;
+    uniform vec3 uColor;
+    void main(){
+      vec2 d = gl_PointCoord - 0.5;
+      float r = dot(d,d);
+      float a = exp(-r*14.0);
+      gl_FragColor = vec4(uColor * a * vA, a * vA);
+    }`,
+  transparent:true, depthWrite:false, blending:THREE.AdditiveBlending,
+});
+const particles = new THREE.Points(partGeom, partMat);
+scene.add(particles);
+
+// Trails: un único draw call con N_PART * TRAIL_LEN puntos. Alpha pequeño
+// por punto + tamaño menor = estelas tenues que no compiten con las cabezas.
+const trailGeom = new THREE.BufferGeometry();
+trailGeom.setAttribute('position', new THREE.BufferAttribute(trailPos, 3));
+trailGeom.setAttribute('aAlpha',   new THREE.BufferAttribute(trailAlpha, 1));
+trailGeom.attributes.position.setUsage(THREE.DynamicDrawUsage);
+trailGeom.attributes.aAlpha.setUsage(THREE.DynamicDrawUsage);
+const trailMat = new THREE.ShaderMaterial({
+  uniforms:{ uColor:{ value: new THREE.Color(0xf0a95c) } },
+  vertexShader:`
+    attribute float aAlpha;
+    varying float vA;
+    void main(){
+      vA = aAlpha;
+      vec4 mv = modelViewMatrix * vec4(position,1.0);
+      gl_PointSize = 3.6 * aAlpha * (260.0 / -mv.z);
+      gl_Position = projectionMatrix * mv;
+    }`,
+  fragmentShader:`
+    varying float vA;
+    uniform vec3 uColor;
+    void main(){
+      vec2 d = gl_PointCoord - 0.5;
+      float r = dot(d,d);
+      float a = exp(-r*10.0);
+      gl_FragColor = vec4(uColor * a * vA * 0.7, a * vA * 0.7);
+    }`,
+  transparent:true, depthWrite:false, blending:THREE.AdditiveBlending,
+});
+const trails = new THREE.Points(trailGeom, trailMat);
+scene.add(trails);
+
+/* ---- Sampling de ∇φ y avance de partículas ----------------- */
+function sampleGradient(fi, fj, out) {
+  // diferencias centrales sobre la grilla, bilinear sobre (fi, fj)
+  const i0 = Math.floor(fi), j0 = Math.floor(fj);
+  const u = fi - i0, v = fj - j0;
+  const i1 = i0+1, j1 = j0+1;
+  if (i0 < 1 || i1 >= NX-1 || j0 < 1 || j1 >= NY-1) { out[0]=0; out[1]=0; return; }
+  const gx00 = (phi[j0*NX + i0+1] - phi[j0*NX + i0-1]) * 0.5;
+  const gx10 = (phi[j0*NX + i1+1] - phi[j0*NX + i1-1]) * 0.5;
+  const gx01 = (phi[j1*NX + i0+1] - phi[j1*NX + i0-1]) * 0.5;
+  const gx11 = (phi[j1*NX + i1+1] - phi[j1*NX + i1-1]) * 0.5;
+  const gy00 = (phi[(j0+1)*NX + i0] - phi[(j0-1)*NX + i0]) * 0.5;
+  const gy10 = (phi[(j0+1)*NX + i1] - phi[(j0-1)*NX + i1]) * 0.5;
+  const gy01 = (phi[(j1+1)*NX + i0] - phi[(j1-1)*NX + i0]) * 0.5;
+  const gy11 = (phi[(j1+1)*NX + i1] - phi[(j1-1)*NX + i1]) * 0.5;
+  out[0] = (1-u)*(1-v)*gx00 + u*(1-v)*gx10 + (1-u)*v*gx01 + u*v*gx11;
+  out[1] = (1-u)*(1-v)*gy00 + u*(1-v)*gy10 + (1-u)*v*gy01 + u*v*gy11;
+}
+
+function samplePhi(fi, fj) {
+  const i0 = Math.floor(fi), j0 = Math.floor(fj);
+  if (i0 < 0 || i0 >= NX-1 || j0 < 0 || j0 >= NY-1) return 0;
+  const u = fi - i0, v = fj - j0;
+  const a = phi[j0*NX + i0],     b = phi[j0*NX + i0+1];
+  const c = phi[(j0+1)*NX + i0], d = phi[(j0+1)*NX + i0+1];
+  return (1-u)*(1-v)*a + u*(1-v)*b + (1-u)*v*c + u*v*d;
+}
+
+const tmpG = [0,0];
+function advectParticles(dt) {
+  const speed = 14.0;   // avance en coords de grilla por segundo
+  for (let p = 0; p < N_PART; p++) {
+    partLife[p] += dt;
+    if (partLife[p] > partMaxLife[p]) { spawnParticle(p); continue; }
+
+    sampleGradient(partI[p], partJ[p], tmpG);
+    // movimiento: −∇φ (fluyen "cuesta abajo" del potencial)
+    partI[p] -= tmpG[0] * speed * dt;
+    partJ[p] -= tmpG[1] * speed * dt;
+
+    if (partI[p] < 1 || partI[p] >= NX-1 || partJ[p] < 1 || partJ[p] >= NY-1) {
+      spawnParticle(p); continue;
+    }
+
+    const wx = (partI[p]/(NX-1) - 0.5) * PLANE_W;
+    const wz = (partJ[p]/(NY-1) - 0.5) * PLANE_H;
+    const wy = samplePhi(partI[p], partJ[p]) * HEIGHT_SCALE + 0.04;
+
+    partPos[3*p]   = wx;
+    partPos[3*p+1] = wy;
+    partPos[3*p+2] = wz;
+
+    // alpha = fade-in inicial + fade-out al final de vida
+    const t = partLife[p] / partMaxLife[p];
+    const fade = Math.min(1, t*6) * Math.min(1, (1-t)*4);
+    // brillo modulado por |∇φ|: las partículas en pendiente brillan más
+    const gMag = Math.min(1, Math.hypot(tmpG[0], tmpG[1]) * 5);
+    partAlphaArr[p] = 0.35 + 0.65 * gMag * fade;
+
+    // ring buffer del trail: escribe en head, decae el resto por edad
+    const h = trailHead[p];
+    const off = (p * TRAIL_LEN + h) * 3;
+    trailPos[off]   = wx;
+    trailPos[off+1] = wy;
+    trailPos[off+2] = wz;
+    trailAlpha[p * TRAIL_LEN + h] = partAlphaArr[p];
+    trailHead[p] = (h + 1) % TRAIL_LEN;
+
+    const base = p * TRAIL_LEN;
+    for (let s = 0; s < TRAIL_LEN; s++) {
+      if (s !== h) trailAlpha[base + s] *= 0.86;
+    }
+  }
+  partGeom.attributes.position.needsUpdate = true;
+  partGeom.attributes.aAlpha.needsUpdate   = true;
+  trailGeom.attributes.position.needsUpdate = true;
+  trailGeom.attributes.aAlpha.needsUpdate   = true;
+}
+
+document.getElementById('tParticles').onchange = e => {
+  showParticles = e.target.checked;
+  particles.visible = showParticles;
+  trails.visible    = showParticles;
+};
+
+/* =============================================================
    PICKING + PINTADO
    El usuario pinta condiciones Dirichlet con el ratón. Para que la
    selección sea intuitiva incluso con relieve, raycasteamos contra
@@ -472,8 +662,11 @@ onResize();
   setBlob(140, 60, -1);
 })();
 
+let prevT = performance.now() / 1000;
 function frame() {
   const now = performance.now() / 1000;
+  let dt = now - prevT; if (dt > 0.05) dt = 0.05;
+  prevT = now;
 
   // cámara con oscilación lenta
   camera.position.x = CAM_BASE.x + Math.sin(now * 0.13) * 0.45;
@@ -483,6 +676,8 @@ function frame() {
 
   iterate(iterPerFrame);
   updateSurface();
+
+  if (showParticles) advectParticles(dt);
 
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
