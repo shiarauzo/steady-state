@@ -1,0 +1,812 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Laplace — el campo que se asienta</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,300;0,400;1,300&family=IBM+Plex+Mono:wght@300;400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+
+<style>
+  :root{
+    --bg:#07080d;
+    --ink:#f4e3c1;
+    --ink-dim:#8a7a5e;
+    --amber:#f0a95c;
+    --rule:rgba(240,169,92,0.18);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);overflow:hidden;
+    font-family:'Spectral',serif;font-weight:300;
+    -webkit-font-smoothing:antialiased;
+  }
+  canvas#c{position:fixed;inset:0;display:block;cursor:crosshair}
+
+  /* --- overlays --- */
+  .layer{position:fixed;pointer-events:none;z-index:5}
+
+  #title{top:34px;left:0;right:0;text-align:center;letter-spacing:0.42em;
+    font-size:11px;text-transform:uppercase;color:var(--ink-dim)}
+  #title b{color:var(--amber);font-weight:400;letter-spacing:0.5em}
+
+  #eq-main{top:60px;left:54px;width:230px}
+  #eq-main .katex{font-size:46px;color:var(--ink)}
+  #eq-main .caption{margin-top:14px;font-family:'IBM Plex Mono',monospace;font-size:10px;
+    letter-spacing:0.22em;color:var(--ink-dim);text-transform:uppercase}
+
+  #eq-discrete{bottom:46px;left:54px;max-width:380px;font-family:'IBM Plex Mono',monospace;
+    font-size:12px;line-height:1.7;color:var(--ink-dim);font-weight:300}
+  #eq-discrete .k{color:var(--amber)}
+  #eq-discrete .lbl{font-family:'Spectral',serif;font-style:italic;font-size:11px;
+    letter-spacing:0.18em;text-transform:uppercase;color:var(--ink-dim);margin-bottom:8px;display:block}
+
+  #ui{top:54px;right:54px;pointer-events:auto;display:flex;flex-direction:column;gap:14px;
+    align-items:flex-end;font-family:'IBM Plex Mono',monospace;font-size:10.5px;
+    letter-spacing:0.18em;text-transform:uppercase;color:var(--ink-dim)}
+  #ui .row{display:flex;align-items:center;gap:10px}
+  #ui button{background:transparent;border:1px solid var(--rule);color:var(--ink);
+    padding:7px 16px;font:inherit;letter-spacing:0.22em;cursor:pointer;
+    transition:background .25s,color .25s,border-color .25s}
+  #ui button:hover{background:var(--amber);color:#1a0f04;border-color:var(--amber)}
+  #ui label{cursor:pointer;display:flex;align-items:center;gap:8px;user-select:none}
+  #ui input[type=checkbox]{appearance:none;-webkit-appearance:none;width:11px;height:11px;
+    border:1px solid var(--rule);background:transparent;display:inline-block;position:relative;cursor:pointer}
+  #ui input[type=checkbox]:checked{background:var(--amber);border-color:var(--amber)}
+  #ui input[type=range]{-webkit-appearance:none;appearance:none;background:transparent;width:120px;height:14px}
+  #ui input[type=range]::-webkit-slider-runnable-track{height:1px;background:var(--rule)}
+  #ui input[type=range]::-moz-range-track{height:1px;background:var(--rule)}
+  #ui input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:9px;height:9px;
+    background:var(--amber);margin-top:-4px;cursor:pointer;border-radius:0}
+  #ui input[type=range]::-moz-range-thumb{width:9px;height:9px;background:var(--amber);
+    border:0;cursor:pointer;border-radius:0}
+  #ui .val{color:var(--amber);min-width:24px;text-align:right}
+
+  #hint{bottom:46px;right:54px;font-family:'IBM Plex Mono',monospace;font-size:10px;
+    letter-spacing:0.22em;color:var(--ink-dim);text-align:right;line-height:1.9;text-transform:uppercase}
+  #hint b{color:var(--amber);font-weight:400}
+
+  /* corner ticks — vintage instrument feel */
+  .tick{position:fixed;width:18px;height:18px;border:1px solid var(--rule);pointer-events:none;z-index:4}
+  .tick.tl{top:24px;left:24px;border-right:0;border-bottom:0}
+  .tick.tr{top:24px;right:24px;border-left:0;border-bottom:0}
+  .tick.bl{bottom:24px;left:24px;border-right:0;border-top:0}
+  .tick.br{bottom:24px;right:24px;border-left:0;border-top:0}
+
+  /* vignette + grain */
+  #vignette{position:fixed;inset:0;pointer-events:none;z-index:3;
+    box-shadow:inset 0 0 260px rgba(0,0,0,0.78), inset 0 0 60px rgba(0,0,0,0.5)}
+  #grain{position:fixed;inset:0;pointer-events:none;z-index:6;opacity:0.08;mix-blend-mode:overlay;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.95  0 0 0 0 0.85  0 0 0 0 0.65  0 0 0 1 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>")}
+
+  /* footer rule */
+  #footer{position:fixed;left:54px;right:54px;bottom:30px;height:1px;background:var(--rule);z-index:4;pointer-events:none}
+  #footer-l{position:fixed;left:54px;bottom:14px;font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:0.32em;color:var(--ink-dim);text-transform:uppercase;z-index:4;pointer-events:none}
+  #footer-r{position:fixed;right:54px;bottom:14px;font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:0.32em;color:var(--ink-dim);text-transform:uppercase;z-index:4;pointer-events:none}
+
+  @media (max-width:760px){
+    #eq-main{left:24px;width:180px}
+    #eq-main .katex{font-size:32px}
+    #eq-discrete{left:24px;font-size:10px;max-width:300px;bottom:60px}
+    #ui{right:24px;top:80px;font-size:9.5px}
+    #hint{right:24px;bottom:60px;font-size:9px}
+    #footer{left:24px;right:24px}
+    #footer-l{left:24px}#footer-r{right:24px}
+    #title{font-size:9.5px;letter-spacing:0.3em}
+  }
+</style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+
+<div class="tick tl"></div>
+<div class="tick tr"></div>
+<div class="tick bl"></div>
+<div class="tick br"></div>
+
+<div class="layer" id="title"><b>Laplace</b> &nbsp;·&nbsp; el campo que se asienta</div>
+
+<div class="layer" id="eq-main">
+  <div id="eq-render"></div>
+  <div class="caption">equilibrio · estado estacionario</div>
+</div>
+
+<div class="layer" id="eq-discrete">
+  <span class="lbl">forma discreta — promedio de vecinos</span>
+  φ<span class="k">ᵢⱼ</span> = <span class="k">¼</span> ( φ<span class="k">ᵢ₊₁ⱼ</span> + φ<span class="k">ᵢ₋₁ⱼ</span> + φ<span class="k">ᵢⱼ₊₁</span> + φ<span class="k">ᵢⱼ₋₁</span> )
+  <br><span style="opacity:0.65">Gauss–Seidel · SOR &nbsp;ω = 1.88</span>
+</div>
+
+<div id="ui">
+  <div class="row"><button id="reset">reset</button></div>
+  <div class="row"><label><input type="checkbox" id="tParticles" checked> particles</label></div>
+  <div class="row"><label><input type="checkbox" id="tIso" checked> equipotentials</label></div>
+  <div class="row"><label>iter/frame <input type="range" min="1" max="20" value="8" id="iter"><span class="val" id="iterVal">8</span></label></div>
+</div>
+
+<div class="layer" id="hint"><b>L</b> ·potencial alto<br><b>R</b> · potencial bajo<br>arrastra para pintar</div>
+
+<div id="vignette"></div>
+<div id="grain"></div>
+
+<div id="footer"></div>
+<div id="footer-l">∇·∇φ = 0 &nbsp;·&nbsp; relaxation method</div>
+<div id="footer-r">200 × 120 · float32</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<script>
+  katex.render("\\nabla^{2}\\varphi = 0", document.getElementById('eq-render'),
+    { displayMode:true, throwOnError:false });
+</script>
+
+<script type="module">
+import * as THREE from 'https://esm.sh/three@0.160.0';
+
+/* =============================================================
+   LAPLACE FIELD — RELAXATION SOLVER
+   -------------------------------------------------------------
+   El campo escalar φ(x,y) obedece ∇²φ = 0 en el interior y
+   condiciones Dirichlet en las celdas que el usuario pinta.
+   En equilibrio cada φᵢⱼ = ¼ (suma de 4 vecinos): la versión
+   discreta del laplaciano nulo en una malla regular.
+   Iteramos Gauss–Seidel con sobre-relajación (SOR):
+        φᵢⱼ ← φᵢⱼ + ω · (¼·Σvecinos − φᵢⱼ)
+   con ω ≈ 1.88 para acelerar la convergencia.
+   ============================================================= */
+
+const NX = 200, NY = 120;
+const N  = NX * NY;
+const phi    = new Float32Array(N);   // valor actual del campo
+const fixed  = new Uint8Array(N);     // 1 si la celda es Dirichlet
+const phiFix = new Float32Array(N);   // valor objetivo de las fijas
+
+const OMEGA = 1.88;
+let iterPerFrame = 8;
+
+function iterate(times) {
+  for (let it = 0; it < times; it++) {
+    // Pass A: celdas con (i+j) impar (en filas pares empieza en i=1; en impares, i=2)
+    for (let j = 1; j < NY - 1; j++) {
+      const row = j * NX;
+      const start = 1 + (j & 1);
+      for (let i = start; i < NX - 1; i += 2) {
+        const k = row + i;
+        if (fixed[k]) continue;
+        const avg = 0.25 * (phi[k-1] + phi[k+1] + phi[k-NX] + phi[k+NX]);
+        phi[k] += OMEGA * (avg - phi[k]);
+      }
+    }
+    // Pass B: celdas con (i+j) par
+    for (let j = 1; j < NY - 1; j++) {
+      const row = j * NX;
+      const start = 2 - (j & 1);
+      for (let i = start; i < NX - 1; i += 2) {
+        const k = row + i;
+        if (fixed[k]) continue;
+        const avg = 0.25 * (phi[k-1] + phi[k+1] + phi[k-NX] + phi[k+NX]);
+        phi[k] += OMEGA * (avg - phi[k]);
+      }
+    }
+    // Bordes Neumann (∂φ/∂n = 0): copiar la fila adyacente al final de cada
+    // iteración para que la pasada siguiente vea una frontera coherente.
+    for (let i = 0; i < NX; i++) {
+      phi[i]              = phi[i + NX];
+      phi[(NY-1)*NX + i]  = phi[(NY-2)*NX + i];
+    }
+    for (let j = 0; j < NY; j++) {
+      phi[j*NX]           = phi[j*NX + 1];
+      phi[j*NX + NX-1]    = phi[j*NX + NX-2];
+    }
+  }
+}
+
+function resetField() {
+  phi.fill(0); fixed.fill(0); phiFix.fill(0);
+  for (let i = 0; i < N_PART; i++) spawnParticle(i);
+}
+
+/* =============================================================
+   THREE.JS SCENE
+   Cámara isométrica fija con oscilación lenta para "respiración"
+   visual sin entrar en conflicto con la interacción de pintado.
+   ============================================================= */
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setClearColor(0x07080d, 1);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0x07080d, 12, 26);
+
+const camera = new THREE.PerspectiveCamera(38, innerWidth/innerHeight, 0.1, 80);
+const CAM_BASE = new THREE.Vector3(0, 7.2, 11.5);
+camera.position.copy(CAM_BASE);
+camera.lookAt(0, 0, 0);
+
+// Iluminación: hemisférica cálida (ámbar arriba, azul noche abajo) +
+// direccional rasante para acentuar el relieve. Un toque frío opuesto
+// evita que la escena se vuelva monocromática.
+scene.add(new THREE.HemisphereLight(0xf0a95c, 0x0a1530, 0.55));
+const dir = new THREE.DirectionalLight(0xfff0d8, 0.85);
+dir.position.set(5.5, 9, 4.5);
+scene.add(dir);
+const rim = new THREE.DirectionalLight(0x6088c8, 0.25);
+rim.position.set(-6, 4, -5);
+scene.add(rim);
+
+/* ---- Heightfield ---------------------------------------------------- */
+const PLANE_W = 13, PLANE_H = 7.8;
+const HEIGHT_SCALE = 1.05;   // φ → altura
+
+const surfaceGeom = new THREE.PlaneGeometry(PLANE_W, PLANE_H, NX-1, NY-1);
+surfaceGeom.rotateX(-Math.PI/2);   // plano en XZ, altura en Y
+const posAttr = surfaceGeom.attributes.position;
+posAttr.setUsage(THREE.DynamicDrawUsage);
+const colAttr = new THREE.BufferAttribute(new Float32Array(3*N), 3);
+colAttr.setUsage(THREE.DynamicDrawUsage);
+surfaceGeom.setAttribute('color', colAttr);
+const normAttr = surfaceGeom.attributes.normal;
+normAttr.setUsage(THREE.DynamicDrawUsage);
+
+const surfaceMat = new THREE.MeshStandardMaterial({
+  vertexColors:true, flatShading:false,
+  metalness:0.18, roughness:0.62,
+});
+const surface = new THREE.Mesh(surfaceGeom, surfaceMat);
+scene.add(surface);
+
+// Plano invisible para picking (se usa en commit posterior). Es plano para
+// que el usuario pinte sobre la "sombra" del relieve, no sobre la montaña.
+const pickGeom = new THREE.PlaneGeometry(PLANE_W, PLANE_H);
+pickGeom.rotateX(-Math.PI/2);
+const pickMesh = new THREE.Mesh(pickGeom, new THREE.MeshBasicMaterial({visible:false}));
+scene.add(pickMesh);
+
+/* ---- Paleta cálida (gradiente) ------------------------------
+   φ ≤ −1 → azul noche
+   φ =  0 → marrón cálido tenue
+   φ ≈ .5 → ámbar (#f0a95c)
+   φ ≥  1 → crema
+   Interpolación lineal a tramos entre 5 stops.              */
+const STOPS = [
+  { t:-1.0, c:[0.040, 0.082, 0.188] },
+  { t:-0.5, c:[0.125, 0.110, 0.180] },
+  { t: 0.0, c:[0.220, 0.140, 0.092] },
+  { t: 0.5, c:[0.942, 0.660, 0.360] },   // f0a95c
+  { t: 1.0, c:[0.957, 0.892, 0.760] },   // crema
+];
+function sampleColor(t, out) {
+  if (t <= STOPS[0].t) { out[0]=STOPS[0].c[0]; out[1]=STOPS[0].c[1]; out[2]=STOPS[0].c[2]; return; }
+  if (t >= STOPS[STOPS.length-1].t) { const c=STOPS[STOPS.length-1].c; out[0]=c[0]; out[1]=c[1]; out[2]=c[2]; return; }
+  for (let s = 0; s < STOPS.length-1; s++) {
+    const a = STOPS[s], b = STOPS[s+1];
+    if (t >= a.t && t <= b.t) {
+      const u = (t - a.t) / (b.t - a.t);
+      out[0] = a.c[0] + (b.c[0]-a.c[0])*u;
+      out[1] = a.c[1] + (b.c[1]-a.c[1])*u;
+      out[2] = a.c[2] + (b.c[2]-a.c[2])*u;
+      return;
+    }
+  }
+}
+
+/* ---- Update del heightfield --------------------------------
+   - Y del vértice = φ * HEIGHT_SCALE (clamp anti-divergencia).
+   - Color por valor de φ.
+   - Normales analíticas a partir del gradiente discreto:
+        n = normalize( (-HS·∂φ/∂x, 1, -HS·∂φ/∂y) )
+     Mucho más rápido que computeVertexNormals.
+   Recorrido del buffer: i (X) rápido, j (Z) lento, k = j*NX + i.   */
+const posArr  = posAttr.array;
+const colArr  = colAttr.array;
+const normArr = normAttr.array;
+const tmpRGB  = [0,0,0];
+const dx = PLANE_W / (NX-1);
+const dy = PLANE_H / (NY-1);
+
+function updateSurface() {
+  // 1) alturas + colores
+  for (let k = 0; k < N; k++) {
+    let v = phi[k];
+    if (v >  3) v =  3;     // safety clamp
+    if (v < -3) v = -3;
+    posArr[3*k + 1] = v * HEIGHT_SCALE;
+    sampleColor(v, tmpRGB);
+    colArr[3*k]   = tmpRGB[0];
+    colArr[3*k+1] = tmpRGB[1];
+    colArr[3*k+2] = tmpRGB[2];
+  }
+  // 2) normales analíticas
+  for (let j = 0; j < NY; j++) {
+    const jm = j > 0      ? j-1 : 0;
+    const jp = j < NY-1   ? j+1 : NY-1;
+    for (let i = 0; i < NX; i++) {
+      const im = i > 0    ? i-1 : 0;
+      const ip = i < NX-1 ? i+1 : NX-1;
+      const dfx = (phi[j*NX + ip] - phi[j*NX + im]) / ((ip-im) * dx);
+      const dfy = (phi[jp*NX + i] - phi[jm*NX + i]) / ((jp-jm) * dy);
+      const nx = -HEIGHT_SCALE * dfx;
+      const ny =  1.0;
+      const nz = -HEIGHT_SCALE * dfy;
+      const inv = 1.0 / Math.hypot(nx, ny, nz);
+      const k = j*NX + i;
+      normArr[3*k]   = nx * inv;
+      normArr[3*k+1] = ny * inv;
+      normArr[3*k+2] = nz * inv;
+    }
+  }
+  posAttr.needsUpdate  = true;
+  colAttr.needsUpdate  = true;
+  normAttr.needsUpdate = true;
+}
+
+// Anillo decorativo bajo la superficie — refuerza el aire de instrumento.
+{
+  const ringGeom = new THREE.RingGeometry(PLANE_W*0.62, PLANE_W*0.625, 128);
+  ringGeom.rotateX(-Math.PI/2);
+  const ringMat = new THREE.MeshBasicMaterial({color:0xf0a95c, transparent:true, opacity:0.07, side:THREE.DoubleSide});
+  const ring = new THREE.Mesh(ringGeom, ringMat);
+  ring.position.y = -0.001;
+  scene.add(ring);
+}
+
+/* =============================================================
+   PARTÍCULAS: fluyen siguiendo −∇φ sobre la superficie 3D.
+   Cada partícula lleva un ring buffer de TRAIL_LEN posiciones para
+   dibujar una estela con decay exponencial; se renderiza con glow
+   aditivo (shader propio sobre THREE.Points).
+   ============================================================= */
+const N_PART    = 2000;
+const TRAIL_LEN = 8;
+let showParticles = true;
+
+const partI    = new Float32Array(N_PART);
+const partJ    = new Float32Array(N_PART);
+const partLife = new Float32Array(N_PART);
+const partMaxLife = new Float32Array(N_PART);
+const partPos      = new Float32Array(N_PART * 3);
+const partAlphaArr = new Float32Array(N_PART);
+
+const trailPos   = new Float32Array(N_PART * TRAIL_LEN * 3);
+const trailAlpha = new Float32Array(N_PART * TRAIL_LEN);
+const trailHead  = new Uint8Array(N_PART);
+
+function spawnParticle(idx) {
+  partI[idx] = 1 + Math.random() * (NX - 3);
+  partJ[idx] = 1 + Math.random() * (NY - 3);
+  partLife[idx] = 0;
+  partMaxLife[idx] = 1.2 + Math.random() * 2.4;
+  // inicializa el trail entero en la posición de spawn para evitar rayas
+  // largas al respawnear cerca del borde
+  const wx = (partI[idx]/(NX-1) - 0.5) * PLANE_W;
+  const wz = (partJ[idx]/(NY-1) - 0.5) * PLANE_H;
+  for (let t = 0; t < TRAIL_LEN; t++) {
+    const off = (idx * TRAIL_LEN + t) * 3;
+    trailPos[off]   = wx;
+    trailPos[off+1] = 0;
+    trailPos[off+2] = wz;
+    trailAlpha[idx * TRAIL_LEN + t] = 0;
+  }
+  trailHead[idx] = 0;
+}
+for (let i = 0; i < N_PART; i++) spawnParticle(i);
+
+const partGeom = new THREE.BufferGeometry();
+partGeom.setAttribute('position', new THREE.BufferAttribute(partPos, 3));
+partGeom.setAttribute('aAlpha',   new THREE.BufferAttribute(partAlphaArr, 1));
+partGeom.attributes.position.setUsage(THREE.DynamicDrawUsage);
+partGeom.attributes.aAlpha.setUsage(THREE.DynamicDrawUsage);
+
+const partMat = new THREE.ShaderMaterial({
+  uniforms:{ uColor:{ value: new THREE.Color(0xf0a95c) } },
+  vertexShader:`
+    attribute float aAlpha;
+    varying float vA;
+    void main(){
+      vA = aAlpha;
+      vec4 mv = modelViewMatrix * vec4(position,1.0);
+      gl_PointSize = 6.5 * aAlpha * (260.0 / -mv.z);
+      gl_Position = projectionMatrix * mv;
+    }`,
+  fragmentShader:`
+    varying float vA;
+    uniform vec3 uColor;
+    void main(){
+      vec2 d = gl_PointCoord - 0.5;
+      float r = dot(d,d);
+      float a = exp(-r*14.0);
+      gl_FragColor = vec4(uColor * a * vA, a * vA);
+    }`,
+  transparent:true, depthWrite:false, blending:THREE.AdditiveBlending,
+});
+const particles = new THREE.Points(partGeom, partMat);
+scene.add(particles);
+
+// Trails: un único draw call con N_PART * TRAIL_LEN puntos. Alpha pequeño
+// por punto + tamaño menor = estelas tenues que no compiten con las cabezas.
+const trailGeom = new THREE.BufferGeometry();
+trailGeom.setAttribute('position', new THREE.BufferAttribute(trailPos, 3));
+trailGeom.setAttribute('aAlpha',   new THREE.BufferAttribute(trailAlpha, 1));
+trailGeom.attributes.position.setUsage(THREE.DynamicDrawUsage);
+trailGeom.attributes.aAlpha.setUsage(THREE.DynamicDrawUsage);
+const trailMat = new THREE.ShaderMaterial({
+  uniforms:{ uColor:{ value: new THREE.Color(0xf0a95c) } },
+  vertexShader:`
+    attribute float aAlpha;
+    varying float vA;
+    void main(){
+      vA = aAlpha;
+      vec4 mv = modelViewMatrix * vec4(position,1.0);
+      gl_PointSize = 3.6 * aAlpha * (260.0 / -mv.z);
+      gl_Position = projectionMatrix * mv;
+    }`,
+  fragmentShader:`
+    varying float vA;
+    uniform vec3 uColor;
+    void main(){
+      vec2 d = gl_PointCoord - 0.5;
+      float r = dot(d,d);
+      float a = exp(-r*10.0);
+      gl_FragColor = vec4(uColor * a * vA * 0.7, a * vA * 0.7);
+    }`,
+  transparent:true, depthWrite:false, blending:THREE.AdditiveBlending,
+});
+const trails = new THREE.Points(trailGeom, trailMat);
+scene.add(trails);
+
+/* ---- Sampling de ∇φ y avance de partículas ----------------- */
+function sampleGradient(fi, fj, out) {
+  // diferencias centrales sobre la grilla, bilinear sobre (fi, fj)
+  const i0 = Math.floor(fi), j0 = Math.floor(fj);
+  const u = fi - i0, v = fj - j0;
+  const i1 = i0+1, j1 = j0+1;
+  if (i0 < 1 || i1 >= NX-1 || j0 < 1 || j1 >= NY-1) { out[0]=0; out[1]=0; return; }
+  const gx00 = (phi[j0*NX + i0+1] - phi[j0*NX + i0-1]) * 0.5;
+  const gx10 = (phi[j0*NX + i1+1] - phi[j0*NX + i1-1]) * 0.5;
+  const gx01 = (phi[j1*NX + i0+1] - phi[j1*NX + i0-1]) * 0.5;
+  const gx11 = (phi[j1*NX + i1+1] - phi[j1*NX + i1-1]) * 0.5;
+  const gy00 = (phi[(j0+1)*NX + i0] - phi[(j0-1)*NX + i0]) * 0.5;
+  const gy10 = (phi[(j0+1)*NX + i1] - phi[(j0-1)*NX + i1]) * 0.5;
+  const gy01 = (phi[(j1+1)*NX + i0] - phi[(j1-1)*NX + i0]) * 0.5;
+  const gy11 = (phi[(j1+1)*NX + i1] - phi[(j1-1)*NX + i1]) * 0.5;
+  out[0] = (1-u)*(1-v)*gx00 + u*(1-v)*gx10 + (1-u)*v*gx01 + u*v*gx11;
+  out[1] = (1-u)*(1-v)*gy00 + u*(1-v)*gy10 + (1-u)*v*gy01 + u*v*gy11;
+}
+
+function samplePhi(fi, fj) {
+  const i0 = Math.floor(fi), j0 = Math.floor(fj);
+  if (i0 < 0 || i0 >= NX-1 || j0 < 0 || j0 >= NY-1) return 0;
+  const u = fi - i0, v = fj - j0;
+  const a = phi[j0*NX + i0],     b = phi[j0*NX + i0+1];
+  const c = phi[(j0+1)*NX + i0], d = phi[(j0+1)*NX + i0+1];
+  return (1-u)*(1-v)*a + u*(1-v)*b + (1-u)*v*c + u*v*d;
+}
+
+const tmpG = [0,0];
+function advectParticles(dt) {
+  const speed = 14.0;   // avance en coords de grilla por segundo
+  for (let p = 0; p < N_PART; p++) {
+    partLife[p] += dt;
+    if (partLife[p] > partMaxLife[p]) { spawnParticle(p); continue; }
+
+    sampleGradient(partI[p], partJ[p], tmpG);
+    // movimiento: −∇φ (fluyen "cuesta abajo" del potencial)
+    partI[p] -= tmpG[0] * speed * dt;
+    partJ[p] -= tmpG[1] * speed * dt;
+
+    if (partI[p] < 1 || partI[p] >= NX-1 || partJ[p] < 1 || partJ[p] >= NY-1) {
+      spawnParticle(p); continue;
+    }
+
+    const wx = (partI[p]/(NX-1) - 0.5) * PLANE_W;
+    const wz = (partJ[p]/(NY-1) - 0.5) * PLANE_H;
+    const wy = samplePhi(partI[p], partJ[p]) * HEIGHT_SCALE + 0.04;
+
+    partPos[3*p]   = wx;
+    partPos[3*p+1] = wy;
+    partPos[3*p+2] = wz;
+
+    // alpha = fade-in inicial + fade-out al final de vida
+    const t = partLife[p] / partMaxLife[p];
+    const fade = Math.min(1, t*6) * Math.min(1, (1-t)*4);
+    // brillo modulado por |∇φ|: las partículas en pendiente brillan más
+    const gMag = Math.min(1, Math.hypot(tmpG[0], tmpG[1]) * 5);
+    partAlphaArr[p] = 0.35 + 0.65 * gMag * fade;
+
+    // ring buffer del trail: escribe en head, decae el resto por edad
+    const h = trailHead[p];
+    const off = (p * TRAIL_LEN + h) * 3;
+    trailPos[off]   = wx;
+    trailPos[off+1] = wy;
+    trailPos[off+2] = wz;
+    trailAlpha[p * TRAIL_LEN + h] = partAlphaArr[p];
+    trailHead[p] = (h + 1) % TRAIL_LEN;
+
+    const base = p * TRAIL_LEN;
+    for (let s = 0; s < TRAIL_LEN; s++) {
+      if (s !== h) trailAlpha[base + s] *= 0.86;
+    }
+  }
+  partGeom.attributes.position.needsUpdate = true;
+  partGeom.attributes.aAlpha.needsUpdate   = true;
+  trailGeom.attributes.position.needsUpdate = true;
+  trailGeom.attributes.aAlpha.needsUpdate   = true;
+}
+
+document.getElementById('tParticles').onchange = e => {
+  showParticles = e.target.checked;
+  particles.visible = showParticles;
+  trails.visible    = showParticles;
+};
+
+/* =============================================================
+   EQUIPOTENCIALES — Marching Squares sobre la grilla
+   Reconstruimos las líneas de nivel sólo cada N frames (el campo
+   se asienta despacio y el ojo no nota el lag). Los segmentos se
+   escriben en un único buffer pre-asignado.
+   ============================================================= */
+const ISO_LEVELS = [-0.8,-0.6,-0.4,-0.2, 0.2,0.4,0.6,0.8];
+const MAX_SEG    = 12000;
+const isoVerts   = new Float32Array(MAX_SEG * 2 * 3);
+const isoGeom    = new THREE.BufferGeometry();
+isoGeom.setAttribute('position', new THREE.BufferAttribute(isoVerts, 3));
+isoGeom.attributes.position.setUsage(THREE.DynamicDrawUsage);
+// bounding sphere estática — los segmentos nunca salen del plano
+isoGeom.boundingSphere = new THREE.Sphere(new THREE.Vector3(0,0,0), Math.max(PLANE_W, PLANE_H));
+const isoMat = new THREE.LineBasicMaterial({color:0xf0a95c, transparent:true, opacity:0.34});
+const isoLines = new THREE.LineSegments(isoGeom, isoMat);
+scene.add(isoLines);
+
+let showIso = true;
+const NX1 = NX - 1, NY1 = NY - 1;
+const HALF_W = PLANE_W * 0.5, HALF_H = PLANE_H * 0.5;
+let isoSegOver = false;
+
+function rebuildIso() {
+  // Convención: a=phi(i,j), b=phi(i+1,j), c=phi(i+1,j+1), d=phi(i,j+1).
+  // Bits: a→1, b→2, c→4, d→8. Aristas: AB(bottom z=z0), BC(right x=x1),
+  // CD(top z=z1), DA(left x=x0).
+  let n = 0;
+  for (let lv = 0; lv < ISO_LEVELS.length; lv++) {
+    const L = ISO_LEVELS[lv];
+    for (let j = 0; j < NY-1; j++) {
+      for (let i = 0; i < NX-1; i++) {
+        const a = phi[j*NX + i],     b = phi[j*NX + i+1];
+        const c = phi[(j+1)*NX + i+1], d = phi[(j+1)*NX + i];
+        let m = 0;
+        if (a > L) m |= 1;
+        if (b > L) m |= 2;
+        if (c > L) m |= 4;
+        if (d > L) m |= 8;
+        if (m === 0 || m === 15) continue;
+
+        // coords mundo de las 4 aristas (interpolación lineal entre los dos
+        // vértices que cruzan el nivel L). Inline para evitar miles de
+        // closures por frame en el hot loop.
+        const x0 = (i      / NX1) * PLANE_W - HALF_W;
+        const x1 = ((i+1)  / NX1) * PLANE_W - HALF_W;
+        const z0 = (j      / NY1) * PLANE_H - HALF_H;
+        const z1 = ((j+1)  / NY1) * PLANE_H - HALF_H;
+        const y  = L * HEIGHT_SCALE + 0.012;   // offset anti-z-fighting
+        const wx = x1 - x0, wz = z1 - z0;
+        const eAB = x0 + wx * ((L-a)/(b-a));
+        const eBC = z0 + wz * ((L-b)/(c-b));
+        const eCD = x0 + wx * ((L-d)/(c-d));
+        const eDA = z0 + wz * ((L-a)/(d-a));
+
+        if (n + 4 > MAX_SEG*2) { isoSegOver = true; break; }
+        let o = n * 3;
+        switch (m) {
+          case 1: case 14:
+            isoVerts[o]=x0;  isoVerts[o+1]=y; isoVerts[o+2]=eDA;
+            isoVerts[o+3]=eAB; isoVerts[o+4]=y; isoVerts[o+5]=z0;
+            n += 2; break;
+          case 2: case 13:
+            isoVerts[o]=eAB; isoVerts[o+1]=y; isoVerts[o+2]=z0;
+            isoVerts[o+3]=x1; isoVerts[o+4]=y; isoVerts[o+5]=eBC;
+            n += 2; break;
+          case 3: case 12:
+            isoVerts[o]=x0;  isoVerts[o+1]=y; isoVerts[o+2]=eDA;
+            isoVerts[o+3]=x1; isoVerts[o+4]=y; isoVerts[o+5]=eBC;
+            n += 2; break;
+          case 4: case 11:
+            isoVerts[o]=x1;  isoVerts[o+1]=y; isoVerts[o+2]=eBC;
+            isoVerts[o+3]=eCD; isoVerts[o+4]=y; isoVerts[o+5]=z1;
+            n += 2; break;
+          case 5:    // saddle: a,c > L
+            isoVerts[o]=x0;  isoVerts[o+1]=y; isoVerts[o+2]=eDA;
+            isoVerts[o+3]=eAB; isoVerts[o+4]=y; isoVerts[o+5]=z0;
+            o += 6;
+            isoVerts[o]=x1;  isoVerts[o+1]=y; isoVerts[o+2]=eBC;
+            isoVerts[o+3]=eCD; isoVerts[o+4]=y; isoVerts[o+5]=z1;
+            n += 4; break;
+          case 6: case 9:
+            isoVerts[o]=eAB; isoVerts[o+1]=y; isoVerts[o+2]=z0;
+            isoVerts[o+3]=eCD; isoVerts[o+4]=y; isoVerts[o+5]=z1;
+            n += 2; break;
+          case 7: case 8:
+            isoVerts[o]=x0;  isoVerts[o+1]=y; isoVerts[o+2]=eDA;
+            isoVerts[o+3]=eCD; isoVerts[o+4]=y; isoVerts[o+5]=z1;
+            n += 2; break;
+          case 10:   // saddle: b,d > L
+            isoVerts[o]=eAB; isoVerts[o+1]=y; isoVerts[o+2]=z0;
+            isoVerts[o+3]=x1; isoVerts[o+4]=y; isoVerts[o+5]=eBC;
+            o += 6;
+            isoVerts[o]=x0;  isoVerts[o+1]=y; isoVerts[o+2]=eDA;
+            isoVerts[o+3]=eCD; isoVerts[o+4]=y; isoVerts[o+5]=z1;
+            n += 4; break;
+        }
+      }
+      if (isoSegOver) break;
+    }
+    if (isoSegOver) break;
+  }
+  isoSegOver = false;
+  isoGeom.setDrawRange(0, n);
+  isoGeom.attributes.position.needsUpdate = true;
+}
+
+document.getElementById('tIso').onchange = e => {
+  showIso = e.target.checked;
+  isoLines.visible = showIso;
+  if (showIso) rebuildIso();   // refresca al instante para evitar líneas stale
+};
+
+/* =============================================================
+   PICKING + PINTADO
+   El usuario pinta condiciones Dirichlet con el ratón. Para que la
+   selección sea intuitiva incluso con relieve, raycasteamos contra
+   un plano invisible (no contra la superficie deformada): pintar
+   sobre la "sombra" del relieve evita oclusiones contraintuitivas.
+   ============================================================= */
+const raycaster = new THREE.Raycaster();
+const ndc       = new THREE.Vector2();
+
+const mouse = { x:0, y:0, down:false, button:0, lastI:-1, lastJ:-1, hasLast:false };
+
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+canvas.addEventListener('pointerdown', e => {
+  mouse.down = true;
+  mouse.button = e.button;
+  mouse.hasLast = false;
+  updateMouseFromEvent(e);
+  paintAtMouse();
+});
+canvas.addEventListener('pointermove', e => {
+  updateMouseFromEvent(e);
+  if (mouse.down) paintAtMouse();
+});
+const releasePointer = () => { mouse.down = false; mouse.hasLast = false; };
+addEventListener('pointerup', releasePointer);
+addEventListener('pointercancel', releasePointer);
+addEventListener('blur', releasePointer);
+
+function updateMouseFromEvent(e) {
+  const r = canvas.getBoundingClientRect();
+  mouse.x = e.clientX - r.left;
+  mouse.y = e.clientY - r.top;
+}
+
+function paintAtMouse() {
+  ndc.x =  (mouse.x / innerWidth)  * 2 - 1;
+  ndc.y = -(mouse.y / innerHeight) * 2 + 1;
+  raycaster.setFromCamera(ndc, camera);
+  const hits = raycaster.intersectObject(pickMesh);
+  if (!hits.length) return;
+  const p = hits[0].point;
+  const fi = (p.x / PLANE_W + 0.5) * (NX-1);
+  const fj = (p.z / PLANE_H + 0.5) * (NY-1);
+  // sólo botones primario / secundario; el medio se ignora
+  const sign = mouse.button === 0 ? +1 : (mouse.button === 2 ? -1 : 0);
+  if (sign === 0) return;
+
+  if (mouse.hasLast) {
+    // pinta una línea desde la última posición a la actual (rellena huecos
+    // en movimientos rápidos donde mousemove no dispara para cada píxel)
+    const steps = Math.max(1, Math.ceil(Math.hypot(fi-mouse.lastI, fj-mouse.lastJ)));
+    for (let s = 1; s <= steps; s++) {
+      const u = s / steps;
+      paintBrush(mouse.lastI + (fi-mouse.lastI)*u,
+                 mouse.lastJ + (fj-mouse.lastJ)*u, sign);
+    }
+  } else {
+    paintBrush(fi, fj, sign);
+  }
+  mouse.lastI = fi; mouse.lastJ = fj; mouse.hasLast = true;
+}
+
+const BRUSH_R = 4.5;
+function paintBrush(fi, fj, sign) {
+  const r  = BRUSH_R;
+  const r2 = r * r;
+  const i0 = Math.max(1, Math.floor(fi - r));
+  const i1 = Math.min(NX-2, Math.ceil(fi + r));
+  const j0 = Math.max(1, Math.floor(fj - r));
+  const j1 = Math.min(NY-2, Math.ceil(fj + r));
+  for (let j = j0; j <= j1; j++) {
+    for (let i = i0; i <= i1; i++) {
+      const di = i - fi, dj = j - fj;
+      const d2 = di*di + dj*dj;
+      if (d2 > r2) continue;
+      const k = j*NX + i;
+      // falloff gaussiano suave hacia el borde del pincel
+      const w = Math.exp(-d2 / (r2 * 0.45));
+      phiFix[k] = phiFix[k] * (1-w) + sign * w;
+      phi[k]    = phiFix[k];
+      fixed[k]  = 1;
+    }
+  }
+}
+
+document.getElementById('reset').onclick = () => resetField();
+
+const iterInput = document.getElementById('iter');
+const iterVal   = document.getElementById('iterVal');
+iterInput.oninput = e => { iterPerFrame = +e.target.value; iterVal.textContent = iterPerFrame; };
+
+/* =============================================================
+   RESIZE + LOOP
+   ============================================================= */
+function onResize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', onResize);
+onResize();
+
+// Estado inicial: dos polos suaves para que se vea algo al cargar.
+(function seed(){
+  const setBlob = (ci, cj, sign) => {
+    const j0 = Math.max(1, cj-7), j1 = Math.min(NY-2, cj+7);
+    const i0 = Math.max(1, ci-7), i1 = Math.min(NX-2, ci+7);
+    for (let j = j0; j <= j1; j++)
+      for (let i = i0; i <= i1; i++){
+        const d2 = (i-ci)*(i-ci)+(j-cj)*(j-cj);
+        if (d2 > 49) continue;
+        const w = Math.exp(-d2/22);
+        const k = j*NX + i;
+        phiFix[k] = sign * w;
+        phi[k]    = phiFix[k];
+        fixed[k]  = w > 0.4 ? 1 : 0;
+      }
+  };
+  setBlob( 60, 60, +1);
+  setBlob(140, 60, -1);
+})();
+
+let prevT = performance.now() / 1000;
+function frame() {
+  const now = performance.now() / 1000;
+  let dt = now - prevT; if (dt > 0.05) dt = 0.05;
+  prevT = now;
+
+  // cámara con oscilación lenta
+  camera.position.x = CAM_BASE.x + Math.sin(now * 0.13) * 0.45;
+  camera.position.z = CAM_BASE.z + Math.cos(now * 0.11) * 0.35;
+  camera.position.y = CAM_BASE.y + Math.sin(now * 0.07) * 0.12;
+  camera.lookAt(0, 0, 0);
+
+  iterate(iterPerFrame);
+  updateSurface();
+
+  if (showParticles) advectParticles(dt);
+
+  if (showIso) {
+    isoFrame++;
+    if (isoFrame % 6 === 0) rebuildIso();
+  }
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+let isoFrame = 0;
+requestAnimationFrame(frame);
+
+</script>
+</body>
+</html>
