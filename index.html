@@ -142,5 +142,96 @@
     { displayMode:true, throwOnError:false });
 </script>
 
+<script type="module">
+import * as THREE from 'https://esm.sh/three@0.160.0';
+
+/* =============================================================
+   THREE.JS SCENE
+   Cámara isométrica fija con oscilación lenta para "respiración"
+   visual sin entrar en conflicto con la interacción de pintado.
+   ============================================================= */
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setClearColor(0x07080d, 1);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0x07080d, 12, 26);
+
+const camera = new THREE.PerspectiveCamera(38, innerWidth/innerHeight, 0.1, 80);
+const CAM_BASE = new THREE.Vector3(0, 7.2, 11.5);
+camera.position.copy(CAM_BASE);
+camera.lookAt(0, 0, 0);
+
+// Iluminación: hemisférica cálida (ámbar arriba, azul noche abajo) +
+// direccional rasante para acentuar el relieve. Un toque frío opuesto
+// evita que la escena se vuelva monocromática.
+scene.add(new THREE.HemisphereLight(0xf0a95c, 0x0a1530, 0.55));
+const dir = new THREE.DirectionalLight(0xfff0d8, 0.85);
+dir.position.set(5.5, 9, 4.5);
+scene.add(dir);
+const rim = new THREE.DirectionalLight(0x6088c8, 0.25);
+rim.position.set(-6, 4, -5);
+scene.add(rim);
+
+/* ---- Heightfield (plano por ahora, animado en commits posteriores) -- */
+const PLANE_W = 13, PLANE_H = 7.8;
+const NX_GEOM = 200, NY_GEOM = 120;
+
+const surfaceGeom = new THREE.PlaneGeometry(PLANE_W, PLANE_H, NX_GEOM-1, NY_GEOM-1);
+surfaceGeom.rotateX(-Math.PI/2);   // plano en XZ, altura en Y
+surfaceGeom.attributes.position.setUsage(THREE.DynamicDrawUsage);
+surfaceGeom.attributes.normal.setUsage(THREE.DynamicDrawUsage);
+
+const surfaceMat = new THREE.MeshStandardMaterial({
+  color:0x3a2418, metalness:0.18, roughness:0.62,
+});
+const surface = new THREE.Mesh(surfaceGeom, surfaceMat);
+scene.add(surface);
+
+// Plano invisible para picking (se usa en commit posterior). Es plano para
+// que el usuario pinte sobre la "sombra" del relieve, no sobre la montaña.
+const pickGeom = new THREE.PlaneGeometry(PLANE_W, PLANE_H);
+pickGeom.rotateX(-Math.PI/2);
+const pickMesh = new THREE.Mesh(pickGeom, new THREE.MeshBasicMaterial({visible:false}));
+scene.add(pickMesh);
+
+// Anillo decorativo bajo la superficie — refuerza el aire de instrumento.
+{
+  const ringGeom = new THREE.RingGeometry(PLANE_W*0.62, PLANE_W*0.625, 128);
+  ringGeom.rotateX(-Math.PI/2);
+  const ringMat = new THREE.MeshBasicMaterial({color:0xf0a95c, transparent:true, opacity:0.07, side:THREE.DoubleSide});
+  const ring = new THREE.Mesh(ringGeom, ringMat);
+  ring.position.y = -0.001;
+  scene.add(ring);
+}
+
+/* =============================================================
+   RESIZE + LOOP
+   ============================================================= */
+function onResize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', onResize);
+onResize();
+
+function frame() {
+  const now = performance.now() / 1000;
+
+  // cámara con oscilación lenta
+  camera.position.x = CAM_BASE.x + Math.sin(now * 0.13) * 0.45;
+  camera.position.z = CAM_BASE.z + Math.cos(now * 0.11) * 0.35;
+  camera.position.y = CAM_BASE.y + Math.sin(now * 0.07) * 0.12;
+  camera.lookAt(0, 0, 0);
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+</script>
 </body>
 </html>
