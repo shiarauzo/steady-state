@@ -75,12 +75,12 @@ void main(){
 }
 `;
 
-function makeTarget(): THREE.WebGLRenderTarget {
-  // HalfFloat (RGBA16F): renderable en muchos más dispositivos que Float32
-  // (basta EXT_color_buffer_half_float) y dobla el ancho de banda del ping-pong.
-  // El campo vive en [-1.2,1.2]; 16F (~3-4 cifras) sobra para la relajación.
+function makeTarget(type: THREE.TextureDataType): THREE.WebGLRenderTarget {
+  // Preferimos Float32: HalfFloat (16F) cuantiza la altura en escalones
+  // visibles ("terrazas") y la relajación SOR no converge fino. Float da un
+  // relieve suave. HalfFloat queda solo como fallback de compatibilidad.
   return new THREE.WebGLRenderTarget(NX, NY, {
-    type: THREE.HalfFloatType,
+    type,
     format: THREE.RGBAFormat,
     minFilter: THREE.NearestFilter,
     magFilter: THREE.NearestFilter,
@@ -93,8 +93,8 @@ function makeTarget(): THREE.WebGLRenderTarget {
 
 export class FieldSolver {
   private renderer: THREE.WebGLRenderer;
-  private rtA = makeTarget();
-  private rtB = makeTarget();
+  private rtA!: THREE.WebGLRenderTarget;
+  private rtB!: THREE.WebGLRenderTarget;
   private scene = new THREE.Scene();
   private camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
   private material: THREE.ShaderMaterial;
@@ -108,15 +108,19 @@ export class FieldSolver {
   // ¿el dispositivo puede renderizar a float/half-float? Si no, la pieza degrada.
   readonly supported: boolean;
 
-  iterPerFrame = 8;
+  iterPerFrame = 12; // más sweeps: la malla más fina necesita propagar más lejos
 
   constructor(renderer: THREE.WebGLRenderer) {
     this.renderer = renderer;
 
     const gl = renderer.getContext();
-    this.supported =
-      !!gl.getExtension("EXT_color_buffer_half_float") ||
-      !!gl.getExtension("EXT_color_buffer_float");
+    const canFloat = !!gl.getExtension("EXT_color_buffer_float");
+    const canHalf = canFloat || !!gl.getExtension("EXT_color_buffer_half_float");
+    this.supported = canHalf;
+    // Float si se puede (relieve suave); si no, HalfFloat como fallback.
+    const type = canFloat ? THREE.FloatType : THREE.HalfFloatType;
+    this.rtA = makeTarget(type);
+    this.rtB = makeTarget(type);
 
     this.bcTex = new THREE.DataTexture(
       this.bcData,
