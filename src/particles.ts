@@ -34,7 +34,10 @@ const pointFrag = (falloff: number, gain: number) => /* glsl */ `
     gl_FragColor = vec4(uColor * a * vA * ${gain.toFixed(2)}, a * vA * ${gain.toFixed(2)});
   }`;
 
-export function createParticles(phi: Float32Array): {
+export function createParticles(
+  phi: Float32Array,
+  fixed: Uint8Array,
+): {
   points: THREE.Points;
   trails: THREE.Points;
   update: (dt: number) => void;
@@ -166,6 +169,13 @@ export function createParticles(phi: Float32Array): {
       partJ[p] -= tmpG[1] * SPEED * dt;
 
       if (partI[p] < 1 || partI[p] >= NX - 1 || partJ[p] < 1 || partJ[p] >= NY - 1) {
+        spawnParticle(p);
+        continue;
+      }
+
+      // las líneas de campo E = −∇φ terminan en las cargas: si la partícula
+      // alcanza una celda Dirichlet (un polo pintado), renace.
+      if (fixed[(Math.round(partJ[p]) * NX + Math.round(partI[p]))]) {
         spawnParticle(p);
         continue;
       }
