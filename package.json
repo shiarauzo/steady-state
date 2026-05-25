@@ -1,0 +1,21 @@
+{
+  "name": "steady-state",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Laplace — el campo que se asienta. Visualización de un campo escalar resuelto en GPU.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "three": "^0.160.1"
+  },
+  "devDependencies": {
+    "@types/three": "^0.160.0",
+    "puppeteer": "^25.0.4",
+    "typescript": "^5.4.5",
+    "vite": "^5.2.11"
+  }
+}
