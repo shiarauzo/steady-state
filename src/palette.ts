@@ -16,11 +16,11 @@ interface Stop {
 }
 
 const STOPS: Stop[] = [
-  { t: -1.0, c: [0.04, 0.082, 0.188] },
-  { t: -0.5, c: [0.125, 0.11, 0.18] },
-  { t: 0.0, c: [0.22, 0.14, 0.092] },
-  { t: 0.5, c: [0.942, 0.66, 0.36] }, // f0a95c
-  { t: 1.0, c: [0.957, 0.892, 0.76] }, // crema
+  { t: -1.0, c: [0.012, 0.035, 0.14] }, // azul noche profundo
+  { t: -0.5, c: [0.06, 0.07, 0.17] },
+  { t: 0.0, c: [0.17, 0.105, 0.075] }, // marrón menos lechoso
+  { t: 0.5, c: [0.96, 0.64, 0.32] }, // ámbar más saturado
+  { t: 1.0, c: [1.0, 0.95, 0.84] }, // crema más luminosa
 ];
 
 type Vec3 = [number, number, number];

@@ -244,7 +244,8 @@ function fitCamera(): void {
   const aspect = camera.aspect;
   const vFOV = (camera.fov * Math.PI) / 180;
   const hFOV = 2 * Math.atan(Math.tan(vFOV / 2) * aspect);
-  const margin = 1.12;
+  // margin < 1 acerca la cámara para que el relieve llene el cuadro (mínimo cielo)
+  const margin = 0.92;
   const distW = (PLANE_W * 0.5 * margin) / Math.tan(hFOV / 2);
   const distH = (PLANE_H * 0.5 * CAM_DIR.y * margin) / Math.tan(vFOV / 2);
   camDist = Math.max(distW, distH);
@@ -266,23 +267,26 @@ addEventListener("resize", onResize);
 onResize();
 
 /* ---- Semilla y reinicio del campo ---- */
+// Cuatro cargas (cuadrupolo) en coords fraccionarias → relieve más escultural,
+// independiente de la resolución de la malla.
 function seedPoles(): void {
-  const setBlob = (ci: number, cj: number, sign: number) => {
-    const j0 = Math.max(1, cj - 7);
-    const j1 = Math.min(NY - 2, cj + 7);
-    const i0 = Math.max(1, ci - 7);
-    const i1 = Math.min(NX - 2, ci + 7);
-    for (let j = j0; j <= j1; j++) {
-      for (let i = i0; i <= i1; i++) {
+  const R = Math.round(NY * 0.07); // radio del blob en celdas, proporcional
+  const R2 = R * R;
+  const blob = (fx: number, fy: number, sign: number) => {
+    const ci = Math.round(fx * (NX - 1));
+    const cj = Math.round(fy * (NY - 1));
+    for (let j = Math.max(1, cj - R); j <= Math.min(NY - 2, cj + R); j++) {
+      for (let i = Math.max(1, ci - R); i <= Math.min(NX - 2, ci + R); i++) {
         const d2 = (i - ci) * (i - ci) + (j - cj) * (j - cj);
-        if (d2 > 49) continue;
-        const w = Math.exp(-d2 / 22);
-        if (w > 0.4) solver.setFixed(j * NX + i, sign * w);
+        if (d2 > R2) continue;
+        if (Math.exp(-d2 / (R2 * 0.45)) > 0.4) solver.setFixed(j * NX + i, sign);
       }
     }
   };
-  setBlob(60, 60, +1);
-  setBlob(140, 60, -1);
+  blob(0.3, 0.4, +1);
+  blob(0.7, 0.42, -1);
+  blob(0.5, 0.74, +1);
+  blob(0.82, 0.78, -1);
 }
 
 const DISSOLVE_AT = 4.5; // s tras la siembra
