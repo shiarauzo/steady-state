@@ -90,6 +90,7 @@ function floatRenderable(gl: WebGL2RenderingContext): boolean {
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
   const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.bindTexture(gl.TEXTURE_2D, null);
   gl.deleteFramebuffer(fb);
   gl.deleteTexture(tex);
   return ok;

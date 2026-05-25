@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { NX, NY, PLANE_W, PLANE_H, HEIGHT_SCALE } from "./constants";
+import { NX, NY, PLANE_W, PLANE_H } from "./constants";
 
 /* =============================================================
    PARTÍCULAS EN GPU (GPGPU)
@@ -31,7 +31,6 @@ const COMMON = /* glsl */ `
   #define GY ${(NY - 1).toFixed(1)}
   #define PW ${PLANE_W.toFixed(4)}
   #define PH ${PLANE_H.toFixed(4)}
-  #define HS ${HEIGHT_SCALE.toFixed(4)}
   const vec2 FT = vec2(${(1 / NX).toFixed(8)}, ${(1 / NY).toFixed(8)});
   const vec2 GM = vec2(GX, GY);
   vec2 fuv(vec2 g){ return (g + 0.5) * FT; }
