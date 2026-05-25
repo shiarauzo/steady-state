@@ -52,6 +52,12 @@
   @media (prefers-reduced-motion:reduce){
     #eq{animation:none;opacity:.24}
   }
+
+  /* fallback sin soporte de float render targets: la ecuación, centrada y grande */
+  body.nofield #c{display:none}
+  body.nofield #eq{inset:0;
+    display:flex;align-items:center;justify-content:center;
+    font-size:clamp(28px,7vw,72px);opacity:.5;animation:none}
 </style>
 </head>
 <body>

@@ -70,7 +70,7 @@ scene.add(surfaceMesh);
   scene.add(ring);
 }
 
-const particles = createParticles(solver.phi);
+const particles = createParticles(solver.phi, solver.fixed);
 scene.add(particles.points);
 scene.add(particles.trails);
 
@@ -263,8 +263,10 @@ const SWAY = matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 1;
 const t0 = performance.now() / 1000;
 let prevT = t0;
 let raf = 0;
+let frameCount = 0;
 
 function frame(): void {
+  frameCount++;
   const now = performance.now() / 1000;
   let dt = now - prevT;
   if (dt > 0.05) dt = 0.05;
@@ -286,8 +288,9 @@ function frame(): void {
   solver.step();
   setFieldTexture(solver.fieldTexture);
 
-  // 2) descarga del campo para partículas (CPU); las iso ya van en el shader
-  solver.readback();
+  // 2) descarga del campo para partículas, throttled a 1 de cada 2 frames
+  //    (el campo se asienta lento); las iso ya van en el shader
+  if (frameCount % 2 === 0) solver.readback();
 
   if (showParticles) particles.update(dt);
 
@@ -319,4 +322,10 @@ canvas.addEventListener("webglcontextlost", (e) => {
 });
 canvas.addEventListener("webglcontextrestored", () => location.reload());
 
-start();
+// Si el dispositivo no puede renderizar a float/half-float, el campo no existe:
+// degradamos a la ecuación estática (CSS) en vez de un canvas negro.
+if (solver.supported) {
+  start();
+} else {
+  document.body.classList.add("nofield");
+}
