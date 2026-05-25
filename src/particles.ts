@@ -18,9 +18,9 @@ import { NX, NY, PLANE_W, PLANE_H, HEIGHT_SCALE } from "./constants";
    - Las líneas de campo terminan en las cargas: si una partícula
      alcanza una celda Dirichlet (uBC.g>0.5), renace.
    ============================================================= */
-const PW = 64;
-const PH = 32;
-const NP = PW * PH; // 2048 partículas
+const PW = 48;
+const PH = 24;
+const NP = PW * PH; // 1152 partículas (menos densas, acentos sobre el oscuro)
 const TRAIL_LEN = 10;
 const SPEED = 14.0;
 const TRAIL_DT = 0.02;
@@ -93,9 +93,10 @@ const ADVECT_FRAG = COMMON + /* glsl */ `
   }
 `;
 
+// Vista cenital plana: posición en XZ a y≈0, tamaño en píxeles (sin escorzo).
 const HEADS_VERT = COMMON + /* glsl */ `
   uniform sampler2D uState, uField;
-  uniform float uSize;
+  uniform float uSize, uDpr;
   attribute vec2 aRef;
   varying float vA;
   void main(){
@@ -104,17 +105,15 @@ const HEADS_VERT = COMMON + /* glsl */ `
     float t = s.z / max(s.w, 1e-3);
     float fade = min(1.0, t * 6.0) * min(1.0, (1.0 - t) * 4.0);
     float gMag = min(1.0, length(fgrad(uField, g)) * 5.0);
-    vA = (0.35 + 0.65 * gMag) * fade;
-    float phi = texture2D(uField, fuv(g)).r;
-    vec4 mv = modelViewMatrix * vec4((g.x/GX-0.5)*PW, phi*HS+0.04, (g.y/GY-0.5)*PH, 1.0);
-    gl_PointSize = uSize * vA * (260.0 / -mv.z);
-    gl_Position = projectionMatrix * mv;
+    vA = (0.3 + 0.7 * gMag) * fade;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4((g.x/GX-0.5)*PW, 0.06, (g.y/GY-0.5)*PH, 1.0);
+    gl_PointSize = uSize * vA * uDpr;
   }
 `;
 
 const TRAILS_VERT = COMMON + /* glsl */ `
   uniform sampler2D uState, uField;
-  uniform float uSize;
+  uniform float uSize, uDpr;
   attribute vec2 aRef;
   attribute float aT;
   varying float vA;
@@ -130,22 +129,23 @@ const TRAILS_VERT = COMMON + /* glsl */ `
       g = clamp(g, vec2(1.0), GM - 1.0);
     }
     float decay = 1.0 - aT / float(${TRAIL_LEN});
-    vA = fade * decay * 0.6;
-    float phi = texture2D(uField, fuv(g)).r;
-    vec4 mv = modelViewMatrix * vec4((g.x/GX-0.5)*PW, phi*HS+0.04, (g.y/GY-0.5)*PH, 1.0);
-    gl_PointSize = uSize * max(vA, 0.0) * (260.0 / -mv.z);
-    gl_Position = projectionMatrix * mv;
+    vA = fade * decay * 0.55;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4((g.x/GX-0.5)*PW, 0.04, (g.y/GY-0.5)*PH, 1.0);
+    gl_PointSize = uSize * max(vA, 0.0) * uDpr;
   }
 `;
 
-const glowFrag = (falloff: number, gain: number) => /* glsl */ `
+// Punto nítido (núcleo + halo sutil), no desenfoque.
+const dotFrag = (gain: number) => /* glsl */ `
   varying float vA;
   uniform vec3 uColor;
   void main(){
     if (vA <= 0.001) discard;
-    vec2 d = gl_PointCoord - 0.5;
-    float a = exp(-dot(d, d) * ${falloff.toFixed(1)});
-    gl_FragColor = vec4(uColor * a * vA * ${gain.toFixed(2)}, a * vA * ${gain.toFixed(2)});
+    float d = length(gl_PointCoord - 0.5);
+    float core = smoothstep(0.5, 0.36, d);
+    float halo = exp(-d * d * 7.0) * 0.3;
+    float a = (core + halo) * vA * ${gain.toFixed(2)};
+    gl_FragColor = vec4(uColor * a, a);
   }
 `;
 
@@ -241,20 +241,23 @@ export function createParticles(
   headsGeo.boundingSphere = bigSphere;
   trailsGeo.boundingSphere = bigSphere;
 
-  const amber = new THREE.Color(0xf0a95c);
+  const dpr = renderer.getPixelRatio();
+  const neon = new THREE.Color(0xbfefff); // blanco-cian nítido
   const headsMat = new THREE.ShaderMaterial({
-    uniforms: { uState: { value: null }, uField: { value: null }, uColor: { value: amber }, uSize: { value: 6.5 } },
+    uniforms: { uState: { value: null }, uField: { value: null }, uColor: { value: neon }, uSize: { value: 4.5 }, uDpr: { value: dpr } },
     vertexShader: HEADS_VERT,
-    fragmentShader: glowFrag(14.0, 1.0),
+    fragmentShader: dotFrag(1.0),
     transparent: true,
+    depthTest: false,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
   });
   const trailsMat = new THREE.ShaderMaterial({
-    uniforms: { uState: { value: null }, uField: { value: null }, uColor: { value: amber }, uSize: { value: 3.6 } },
+    uniforms: { uState: { value: null }, uField: { value: null }, uColor: { value: neon }, uSize: { value: 3.0 }, uDpr: { value: dpr } },
     vertexShader: TRAILS_VERT,
-    fragmentShader: glowFrag(10.0, 0.7),
+    fragmentShader: dotFrag(0.55),
     transparent: true,
+    depthTest: false,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
   });

@@ -15,12 +15,13 @@ interface Stop {
   c: [number, number, number];
 }
 
+// Espectro neón/tech: cian → violeta → (negro) → púrpura → magenta.
 const STOPS: Stop[] = [
-  { t: -1.0, c: [0.012, 0.035, 0.14] }, // azul noche profundo
-  { t: -0.5, c: [0.06, 0.07, 0.17] },
-  { t: 0.0, c: [0.17, 0.105, 0.075] }, // marrón menos lechoso
-  { t: 0.5, c: [0.96, 0.64, 0.32] }, // ámbar más saturado
-  { t: 1.0, c: [1.0, 0.95, 0.84] }, // crema más luminosa
+  { t: -1.0, c: [0.0, 0.898, 1.0] }, // cian #00e5ff
+  { t: -0.5, c: [0.416, 0.235, 1.0] }, // violeta #6a3cff
+  { t: 0.0, c: [0.024, 0.024, 0.047] }, // negro-azulado #06060c
+  { t: 0.5, c: [0.753, 0.149, 1.0] }, // púrpura #c026ff
+  { t: 1.0, c: [1.0, 0.169, 0.816] }, // magenta #ff2bd0
 ];
 
 type Vec3 = [number, number, number];

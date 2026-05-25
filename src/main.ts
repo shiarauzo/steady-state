@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { NX, NY, PLANE_W, PLANE_H } from "./constants";
 import { FieldSolver } from "./FieldSolver";
-import { createSurface } from "./surface";
+import { createDotField } from "./fieldView";
 import { createParticles } from "./particles";
 import { seedEquation } from "./seedEquation";
 
@@ -24,69 +24,40 @@ const renderer = new THREE.WebGLRenderer({
 // pixel ratio adaptativo: cap bajo en pantallas táctiles (fill-rate caro en móvil)
 const PR_CAP = matchMedia("(pointer:coarse)").matches ? 1.5 : 2;
 renderer.setPixelRatio(Math.min(devicePixelRatio, PR_CAP));
-renderer.setClearColor(0x07080d, 0); // transparente: deja ver la atmósfera CSS
+renderer.setClearColor(0x05060a, 1);
 renderer.autoClear = true;
-// AgX tone mapping: HDR→LDR moderno; preserva los highlights cálidos sin quemar
-renderer.toneMapping = THREE.AgXToneMapping;
-renderer.toneMappingExposure = 1.35;
+renderer.toneMapping = THREE.NoToneMapping; // dots nítidos: color puro sobre negro
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0x07080d, 12, 26);
+scene.background = new THREE.Color(0x04050a); // negro tech, espacio negativo
 
-const camera = new THREE.PerspectiveCamera(38, innerWidth / innerHeight, 0.1, 120);
-// Picado moderado (~52°): el plano llena el cuadro conservando el relieve 3D.
-const CAM_DIR = new THREE.Vector3(0, 0.79, 0.615); // sin52°, cos52°
-const CAM_TARGET = new THREE.Vector3(0, 0.15, 0);
-const CAM_BASE = new THREE.Vector3();
-let camDist = 12;
+// Cámara CENITAL ortográfica (vista de mapa plano, sin perspectiva ni escorzo).
+const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
+camera.position.set(0, 10, 0);
+camera.up.set(0, 0, -1); // +x derecha, +z hacia abajo en pantalla
+camera.lookAt(0, 0, 0);
 
-// Iluminación cálida: hemisférica + direccional rasante + rim frío opuesto.
-scene.add(new THREE.HemisphereLight(0xf0a95c, 0x0a1530, 0.55));
-const dir = new THREE.DirectionalLight(0xfff0d8, 0.85);
-dir.position.set(5.5, 9, 4.5);
-scene.add(dir);
-const rim = new THREE.DirectionalLight(0x6088c8, 0.25);
-rim.position.set(-6, 4, -5);
-scene.add(rim);
-
-/* ---- Solver GPU + objetos ---- */
+/* ---- Solver GPU + vista de campo (puntos + equipotenciales) ---- */
 const solver = new FieldSolver(renderer);
 
-const { mesh: surfaceMesh, setFieldTexture } = createSurface(solver.fieldTexture);
-scene.add(surfaceMesh);
-
-// Anillo decorativo bajo la superficie — refuerza el aire de instrumento.
-{
-  const ringGeom = new THREE.RingGeometry(PLANE_W * 0.62, PLANE_W * 0.625, 128);
-  ringGeom.rotateX(-Math.PI / 2);
-  const ringMat = new THREE.MeshBasicMaterial({
-    color: 0xf0a95c,
-    transparent: true,
-    opacity: 0.07,
-    side: THREE.DoubleSide,
-  });
-  const ring = new THREE.Mesh(ringGeom, ringMat);
-  ring.position.y = -0.001;
-  scene.add(ring);
-}
+const dotField = createDotField(solver.fieldTexture);
+dotField.setDpr(renderer.getPixelRatio());
+scene.add(dotField.group);
+const setFieldTexture = dotField.setField;
 
 const particles = createParticles(renderer, solver.bcTexture);
+particles.points.renderOrder = 3;
+particles.trails.renderOrder = 3;
 
-// prefers-reduced-motion: sin partículas en movimiento (queda el campo
-// contemplativo: relieve + equipotenciales) ni "respiración" de cámara.
+// prefers-reduced-motion: sin partículas en movimiento (queda el campo estático).
 const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
-const SWAY = REDUCED ? 0 : 1;
 const showParticles = !REDUCED;
 if (showParticles) {
   scene.add(particles.points);
   scene.add(particles.trails);
 }
 
-// (Las equipotenciales ahora se dibujan en screen-space dentro del shader de
-// la superficie — ya no hay marching squares en CPU ni objeto aparte.)
-
-// Plano invisible para picking: pintar sobre la "sombra" del relieve evita
-// oclusiones contraintuitivas cuando el campo se levanta.
+// Plano invisible para picking (pintar en el plano del campo).
 const pickGeom = new THREE.PlaneGeometry(PLANE_W, PLANE_H);
 pickGeom.rotateX(-Math.PI / 2);
 const pickMesh = new THREE.Mesh(
@@ -238,30 +209,30 @@ function paintBrush(fi: number, fj: number, sign: number): void {
 }
 
 /* =============================================================
-   RESIZE + FIT CÁMARA
+   RESIZE — encaje ortográfico (campo contenido y centrado, con
+   margen de espacio negativo a los lados)
    ============================================================= */
-function fitCamera(): void {
-  const aspect = camera.aspect;
-  const vFOV = (camera.fov * Math.PI) / 180;
-  const hFOV = 2 * Math.atan(Math.tan(vFOV / 2) * aspect);
-  // margin < 1 acerca la cámara para que el relieve llene el cuadro (mínimo cielo)
-  const margin = 0.92;
-  const distW = (PLANE_W * 0.5 * margin) / Math.tan(hFOV / 2);
-  const distH = (PLANE_H * 0.5 * CAM_DIR.y * margin) / Math.tan(vFOV / 2);
-  camDist = Math.max(distW, distH);
-  CAM_BASE.copy(CAM_DIR).multiplyScalar(camDist).add(CAM_TARGET);
-  const fog = scene.fog as THREE.Fog;
-  fog.near = camDist * 0.6;
-  fog.far = camDist * 2.6;
-}
-
 function onResize(): void {
   const w = innerWidth;
   const h = innerHeight;
   renderer.setSize(w, h, false);
-  camera.aspect = w / h;
+  const aspect = w / h;
+  const fieldAspect = PLANE_W / PLANE_H;
+  const margin = 1.12; // > 1 deja aire alrededor (espacio negativo)
+  let halfH: number;
+  let halfW: number;
+  if (aspect > fieldAspect) {
+    halfH = (PLANE_H * 0.5) * margin;
+    halfW = halfH * aspect;
+  } else {
+    halfW = (PLANE_W * 0.5) * margin;
+    halfH = halfW / aspect;
+  }
+  camera.left = -halfW;
+  camera.right = halfW;
+  camera.top = halfH;
+  camera.bottom = -halfH;
   camera.updateProjectionMatrix();
-  fitCamera();
 }
 addEventListener("resize", onResize);
 onResize();
@@ -331,20 +302,14 @@ function frame(): void {
     equationReleased = true;
   }
 
-  // cámara con oscilación lenta ("respiración"); SWAY=0 con reduced-motion
-  camera.position.x = CAM_BASE.x + Math.sin(now * 0.13) * 0.45 * SWAY;
-  camera.position.z = CAM_BASE.z + Math.cos(now * 0.11) * 0.35 * SWAY;
-  camera.position.y = CAM_BASE.y + Math.sin(now * 0.07) * 0.12 * SWAY;
-  camera.lookAt(CAM_TARGET);
-
-  // 1) relajación en GPU + textura del campo a superficie y partículas
+  // 1) relajación en GPU + textura del campo a la vista y a las partículas
   solver.step();
   setFieldTexture(solver.fieldTexture);
 
   // 2) partículas advectadas en GPU leyendo la textura del campo (sin readback)
   if (showParticles) particles.update(dt, solver.fieldTexture);
 
-  renderer.render(scene, camera);
+  renderer.render(scene, camera); // vista cenital nítida (sin postprocesado)
   raf = requestAnimationFrame(frame);
 }
 
