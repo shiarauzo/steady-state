@@ -91,16 +91,6 @@ function makeTarget(): THREE.WebGLRenderTarget {
   });
 }
 
-/** Decodifica un half-float (16 bits) a número JS. */
-function halfToFloat(h: number): number {
-  const s = (h & 0x8000) >> 15;
-  const e = (h & 0x7c00) >> 10;
-  const f = h & 0x03ff;
-  if (e === 0) return (s ? -1 : 1) * 2 ** -14 * (f / 1024);
-  if (e === 0x1f) return f ? NaN : (s ? -Infinity : Infinity);
-  return (s ? -1 : 1) * 2 ** (e - 15) * (1 + f / 1024);
-}
-
 export class FieldSolver {
   private renderer: THREE.WebGLRenderer;
   private rtA = makeTarget();
@@ -114,10 +104,6 @@ export class FieldSolver {
   readonly fixed = new Uint8Array(N);
   private bcData = new Float32Array(N * 4);
   private bcTex: THREE.DataTexture;
-
-  // Lectura del campo a CPU (la usan las partículas).
-  readonly phi = new Float32Array(N);
-  private readBuf = new Uint16Array(N * 4); // half-float crudo
 
   // ¿el dispositivo puede renderizar a float/half-float? Si no, la pieza degrada.
   readonly supported: boolean;
@@ -161,9 +147,16 @@ export class FieldSolver {
     this.clearTargets();
   }
 
-  /** Textura del campo actual — la muestrea el shader de la superficie. */
+  /** Textura del campo actual — la muestrean el shader de la superficie y las
+      partículas GPU. Cambia de identidad en cada swap del ping-pong. */
   get fieldTexture(): THREE.Texture {
     return this.rtA.texture;
+  }
+
+  /** Textura de condiciones de contorno: .g = 1 en celdas Dirichlet (polos).
+      Las partículas GPU la usan para renacer al llegar a una carga. */
+  get bcTexture(): THREE.DataTexture {
+    return this.bcTex;
   }
 
   private clearTargets(): void {
@@ -199,17 +192,6 @@ export class FieldSolver {
     this.renderer.setRenderTarget(null);
   }
 
-  /** Descarga el campo desde la GPU a `this.phi` (decodificando half-float).
-      Conviene llamarlo throttled (1 de cada 2 frames): el campo se asienta
-      despacio, así que leer el de hace 1 frame es indistinguible y se reduce
-      a la mitad el coste del stall GPU→CPU de readRenderTargetPixels. */
-  readback(): void {
-    this.renderer.readRenderTargetPixels(this.rtA, 0, 0, NX, NY, this.readBuf);
-    const buf = this.readBuf;
-    const phi = this.phi;
-    for (let k = 0; k < N; k++) phi[k] = halfToFloat(buf[k * 4]);
-  }
-
   /** Marca una celda como Dirichlet con el valor dado (espejo CPU + textura). */
   setFixed(k: number, value: number): void {
     this.phiFix[k] = value;
@@ -238,7 +220,6 @@ export class FieldSolver {
   }
 
   reset(): void {
-    this.phi.fill(0);
     this.phiFix.fill(0);
     this.fixed.fill(0);
     this.bcData.fill(0);

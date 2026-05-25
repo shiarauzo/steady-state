@@ -70,7 +70,7 @@ scene.add(surfaceMesh);
   scene.add(ring);
 }
 
-const particles = createParticles(solver.phi, solver.fixed);
+const particles = createParticles(renderer, solver.bcTexture);
 
 // prefers-reduced-motion: sin partículas en movimiento (queda el campo
 // contemplativo: relieve + equipotenciales) ni "respiración" de cámara.
@@ -298,7 +298,7 @@ function initField(now: number): void {
   releaseEquation = seedEquation(solver); // se disuelve al converger (issue #11)
   equationReleased = false;
   seedT = now;
-  if (showParticles) particles.respawnAll();
+  if (showParticles) particles.reseed();
 }
 
 // Tecla R: reinicio.
@@ -312,12 +312,10 @@ addEventListener("keydown", (e) => {
 const t0 = performance.now() / 1000;
 let prevT = t0;
 let raf = 0;
-let frameCount = 0;
 
 initField(t0); // siembra inicial (polos + ecuación)
 
 function frame(): void {
-  frameCount++;
   const now = performance.now() / 1000;
   let dt = now - prevT;
   if (dt > 0.05) dt = 0.05;
@@ -335,15 +333,12 @@ function frame(): void {
   camera.position.y = CAM_BASE.y + Math.sin(now * 0.07) * 0.12 * SWAY;
   camera.lookAt(CAM_TARGET);
 
-  // 1) relajación en GPU + textura del campo al shader de superficie
+  // 1) relajación en GPU + textura del campo a superficie y partículas
   solver.step();
   setFieldTexture(solver.fieldTexture);
 
-  // 2) descarga del campo para partículas, throttled a 1 de cada 2 frames
-  //    (el campo se asienta lento); las iso ya van en el shader
-  if (frameCount % 2 === 0) solver.readback();
-
-  if (showParticles) particles.update(dt);
+  // 2) partículas advectadas en GPU leyendo la textura del campo (sin readback)
+  if (showParticles) particles.update(dt, solver.fieldTexture);
 
   renderer.render(scene, camera);
   raf = requestAnimationFrame(frame);
