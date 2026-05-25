@@ -25,7 +25,8 @@
       radial-gradient(ellipse 95% 60% at 50% 46%, rgba(240,169,92,0.11), rgba(7,8,13,0) 62%),
       var(--bg);
   }
-  canvas#c{position:fixed;inset:0;display:block;cursor:crosshair}
+  canvas#c{position:fixed;inset:0;display:block;cursor:crosshair;
+    touch-action:none}  /* evita que el arrastre haga scroll/zoom en móvil */
 
   /* vignette + grain */
   #vignette{position:fixed;inset:0;pointer-events:none;z-index:3;

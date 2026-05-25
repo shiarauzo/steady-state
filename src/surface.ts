@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { NX, NY, PLANE_W, PLANE_H, HEIGHT_SCALE } from "./constants";
-import { paletteGLSL } from "./palette";
+import { buildPaletteLUT } from "./palette";
 
 /* =============================================================
    HEIGHTFIELD EN GPU
@@ -8,50 +8,66 @@ import { paletteGLSL } from "./palette";
    Un plano teselado (NX-1 × NY-1) cuyos vértices se desplazan en
    el shader leyendo la textura del campo (vertex texture fetch):
         y = φ(uv) · HEIGHT_SCALE
-   Las normales se calculan analíticamente del gradiente discreto
-   muestreando texels vecinos, y el color sale de la misma paleta
-   cálida que las equipotenciales. Inyectamos todo en un
-   MeshStandardMaterial (onBeforeCompile) para conservar el PBR y
-   las luces hemisférica/direccional de la escena.
+   Las normales se calculan del gradiente discreto muestreando
+   texels vecinos. El color sale de una LUT 1D horneada en OKLab
+   (paleta perceptual), y las equipotenciales se dibujan en
+   screen-space sobre el propio relieve con fract()+fwidth() — AA
+   perfecto, densidad tipo mapa topográfico y sin z-fighting.
+   Inyectamos todo en un MeshStandardMaterial (onBeforeCompile)
+   para conservar el PBR y las luces de la escena.
 
-   Convención de índices: el vértice de columna i, fila j tiene
-        uv.x = i/(NX-1),  uv.y = 1 − j/(NY-1)
-   (PlaneGeometry, tras rotateX(-90°), invierte la V). Reconstruimos
-   (i,j) y muestreamos el texel centrado ((i+.5)/NX, (j+.5)/NY) para
-   que el relieve coincida exactamente con lo que se pinta y con las
-   partículas/iso, que indexan el array por k = j·NX + i.
+   Convención de índices: el vértice (i,j) tiene uv.x=i/(NX-1),
+   uv.y=1−j/(NY-1); reconstruimos (i,j) y muestreamos el texel
+   centrado ((i+.5)/NX,(j+.5)/NY) para alinear con pintado,
+   partículas y campo.
    ============================================================= */
+
+const ISO_SPACING = 0.2; // separación de equipotenciales en φ
+const ISO_COLOR = new THREE.Color(0xf0a95c);
+
 export function createSurface(fieldTexture: THREE.Texture): {
   mesh: THREE.Mesh;
   setFieldTexture: (t: THREE.Texture) => void;
 } {
   const geom = new THREE.PlaneGeometry(PLANE_W, PLANE_H, NX - 1, NY - 1);
   geom.rotateX(-Math.PI / 2); // plano en XZ, altura en Y
-  // bounding sphere amplia: los vértices se desplazan en el shader y el
-  // frustum culling no debe descartar la malla cuando crece el relieve.
   geom.boundingSphere = new THREE.Sphere(
     new THREE.Vector3(0, 0, 0),
     Math.max(PLANE_W, PLANE_H) + 4,
   );
 
+  // LUT de la paleta (OKLab) como textura 1D, muestreada por valor de φ.
+  const lut = new THREE.DataTexture(
+    buildPaletteLUT(256),
+    256,
+    1,
+    THREE.RGBAFormat,
+    THREE.UnsignedByteType,
+  );
+  lut.minFilter = THREE.LinearFilter;
+  lut.magFilter = THREE.LinearFilter;
+  lut.wrapS = THREE.ClampToEdgeWrapping;
+  lut.needsUpdate = true;
+
   const mat = new THREE.MeshStandardMaterial({
     metalness: 0.18,
     roughness: 0.62,
     flatShading: false,
+    dithering: true, // rompe el banding de 8 bits en el degradado
   });
 
   const uniforms = {
     uField: { value: fieldTexture },
+    uPalette: { value: lut },
     uTexel: { value: new THREE.Vector2(1 / NX, 1 / NY) },
     uGrid: { value: new THREE.Vector2(NX - 1, NY - 1) },
     uHeight: { value: HEIGHT_SCALE },
-    uDxy: {
-      value: new THREE.Vector2(PLANE_W / (NX - 1), PLANE_H / (NY - 1)),
-    },
+    uDxy: { value: new THREE.Vector2(PLANE_W / (NX - 1), PLANE_H / (NY - 1)) },
+    uIsoSpacing: { value: ISO_SPACING },
+    uIsoColor: { value: ISO_COLOR },
   };
 
   mat.onBeforeCompile = (shader) => {
-    // compartir por referencia para poder actualizar uField cada frame
     for (const key of Object.keys(uniforms) as (keyof typeof uniforms)[]) {
       shader.uniforms[key] = uniforms[key];
     }
@@ -65,12 +81,9 @@ export function createSurface(fieldTexture: THREE.Texture): {
         uniform vec2 uGrid;
         uniform vec2 uDxy;
         uniform float uHeight;
-        varying vec3 vTint;
-        ${paletteGLSL()}
+        varying float vPhi;
         `,
       )
-      // beginnormal_vertex corre primero: aquí calculamos uv centrada,
-      // altura y normal analítica, y dejamos h/sUv para begin_vertex.
       .replace(
         "#include <beginnormal_vertex>",
         /* glsl */ `
@@ -94,18 +107,35 @@ export function createSurface(fieldTexture: THREE.Texture): {
         /* glsl */ `
         vec3 transformed = vec3(position);
         transformed.y = _h * uHeight;
-        vTint = palette(_h);
+        vPhi = _h;
         `,
       );
 
     shader.fragmentShader = shader.fragmentShader
       .replace(
         "#include <common>",
-        "#include <common>\n        varying vec3 vTint;",
+        /* glsl */ `#include <common>
+        uniform sampler2D uPalette;
+        uniform float uIsoSpacing;
+        uniform vec3 uIsoColor;
+        varying float vPhi;
+        `,
       )
+      // color por valor de φ desde la LUT OKLab (φ∈[-1,1] → [0,1])
       .replace(
         "#include <color_fragment>",
-        "#include <color_fragment>\n        diffuseColor.rgb *= vTint;",
+        /* glsl */ `#include <color_fragment>
+        diffuseColor.rgb *= texture2D(uPalette, vec2(clamp(vPhi * 0.5 + 0.5, 0.0, 1.0), 0.5)).rgb;
+        `,
+      )
+      // equipotenciales screen-space como emisivo (glow constante, sin z-fight)
+      .replace(
+        "#include <emissivemap_fragment>",
+        /* glsl */ `#include <emissivemap_fragment>
+        float _s = vPhi / uIsoSpacing;
+        float _iso = 1.0 - clamp(abs(fract(_s - 0.5) - 0.5) / max(fwidth(_s), 1e-4), 0.0, 1.0);
+        totalEmissiveRadiance += uIsoColor * _iso * 0.5;
+        `,
       );
   };
 
