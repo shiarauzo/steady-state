@@ -4,6 +4,7 @@ import { FieldSolver } from "./FieldSolver";
 import { createSurface } from "./surface";
 import { createParticles } from "./particles";
 import { createIso } from "./iso";
+import { seedEquation } from "./seedEquation";
 
 /* =============================================================
    LAPLACE — EL CAMPO QUE SE ASIENTA
@@ -100,21 +101,37 @@ const mouse = {
   hasLast: false,
 };
 
+// Sigilo de la condición Dirichlet: ±φ siguiendo el cursor al pintar (issue #9).
+const sig = document.getElementById("sig") as HTMLDivElement;
+function showSig(e: PointerEvent): void {
+  if (mouse.button === 1) return; // botón central no pinta: tampoco sigilo
+  sig.textContent = mouse.button === 2 ? "−φ" : "+φ";
+  sig.style.left = `${e.clientX}px`;
+  sig.style.top = `${e.clientY}px`;
+  sig.style.display = "block";
+}
+
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 canvas.addEventListener("pointerdown", (e) => {
+  canvas.setPointerCapture(e.pointerId); // traza continua aunque el cursor salga
   mouse.down = true;
   mouse.button = e.button;
   mouse.hasLast = false;
   updateMouseFromEvent(e);
   paintAtMouse();
+  showSig(e);
 });
 canvas.addEventListener("pointermove", (e) => {
   updateMouseFromEvent(e);
-  if (mouse.down) paintAtMouse();
+  if (mouse.down) {
+    paintAtMouse();
+    showSig(e);
+  }
 });
 const releasePointer = () => {
   mouse.down = false;
   mouse.hasLast = false;
+  sig.style.display = "none";
 };
 addEventListener("pointerup", releasePointer);
 addEventListener("pointercancel", releasePointer);
@@ -228,10 +245,20 @@ onResize();
   setBlob(140, 60, -1);
 })();
 
+// La ecuación ∇²φ = 0 sembrada en el propio campo; se disolverá al converger,
+// asentándose sobre los dos polos (issue #11).
+const releaseEquation = seedEquation(solver);
+const DISSOLVE_AT = 4.5; // s tras la carga
+let equationReleased = false;
+
+// Respeta prefers-reduced-motion: anula la "respiración" de cámara (issue #10).
+const SWAY = matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 1;
+
 /* =============================================================
    LOOP
    ============================================================= */
-let prevT = performance.now() / 1000;
+const t0 = performance.now() / 1000;
+let prevT = t0;
 let isoFrame = 0;
 
 function frame(): void {
@@ -240,10 +267,16 @@ function frame(): void {
   if (dt > 0.05) dt = 0.05;
   prevT = now;
 
-  // cámara con oscilación lenta ("respiración")
-  camera.position.x = CAM_BASE.x + Math.sin(now * 0.13) * 0.45;
-  camera.position.z = CAM_BASE.z + Math.cos(now * 0.11) * 0.35;
-  camera.position.y = CAM_BASE.y + Math.sin(now * 0.07) * 0.12;
+  // disuelve la ecuación sembrada una vez (issue #11)
+  if (!equationReleased && now - t0 > DISSOLVE_AT) {
+    releaseEquation();
+    equationReleased = true;
+  }
+
+  // cámara con oscilación lenta ("respiración"); SWAY=0 con reduced-motion
+  camera.position.x = CAM_BASE.x + Math.sin(now * 0.13) * 0.45 * SWAY;
+  camera.position.z = CAM_BASE.z + Math.cos(now * 0.11) * 0.35 * SWAY;
+  camera.position.y = CAM_BASE.y + Math.sin(now * 0.07) * 0.12 * SWAY;
   camera.lookAt(CAM_TARGET);
 
   // 1) relajación en GPU + textura del campo al shader de superficie
