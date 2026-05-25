@@ -2,219 +2,295 @@ import * as THREE from "three";
 import { NX, NY, PLANE_W, PLANE_H, HEIGHT_SCALE } from "./constants";
 
 /* =============================================================
-   PARTÍCULAS: fluyen siguiendo −∇φ sobre la superficie 3D.
+   PARTÍCULAS EN GPU (GPGPU)
    -------------------------------------------------------------
-   El gradiente se muestrea (bilinear) del campo descargado a CPU.
-   Cada partícula lleva un ring buffer de TRAIL_LEN posiciones para
-   dibujar una estela con decay exponencial; cabezas y estelas se
-   renderizan con glow aditivo en dos draw calls.
+   Las partículas fluyen por −∇φ. Todo vive en la GPU: su estado
+   (posición normalizada + vida) se guarda en una textura ping-pong
+   y se advecta en un shader que muestrea la textura del campo
+   directamente — sin readback a CPU.
+
+   - Cabezas: THREE.Points que leen el estado por vertex texture
+     fetch y sitúan cada punto sobre el relieve.
+   - Estelas: SIN buffer de historia. Como las partículas siguen
+     streamlines, su trayectoria pasada está sobre la línea de
+     campo; cada vértice de estela REINTEGRA hacia atrás (+∇φ) desde
+     la cabeza, reconstruyendo la estela en el vertex shader.
+   - Las líneas de campo terminan en las cargas: si una partícula
+     alcanza una celda Dirichlet (uBC.g>0.5), renace.
    ============================================================= */
-const N_PART = 2000;
-const TRAIL_LEN = 8;
-const SPEED = 14.0; // avance en coords de grilla por segundo
+const PW = 64;
+const PH = 32;
+const NP = PW * PH; // 2048 partículas
+const TRAIL_LEN = 10;
+const SPEED = 14.0;
+const TRAIL_DT = 0.02;
 
-const POINT_VERT = /* glsl */ `
-  attribute float aAlpha;
-  varying float vA;
-  uniform float uSize;
+// Prelude GLSL compartido (constantes de malla/mundo + helpers de campo).
+const COMMON = /* glsl */ `
+  #define GX ${(NX - 1).toFixed(1)}
+  #define GY ${(NY - 1).toFixed(1)}
+  #define PW ${PLANE_W.toFixed(4)}
+  #define PH ${PLANE_H.toFixed(4)}
+  #define HS ${HEIGHT_SCALE.toFixed(4)}
+  const vec2 FT = vec2(${(1 / NX).toFixed(8)}, ${(1 / NY).toFixed(8)});
+  const vec2 GM = vec2(GX, GY);
+  vec2 fuv(vec2 g){ return (g + 0.5) * FT; }
+  vec2 fgrad(sampler2D F, vec2 g){
+    vec2 uv = fuv(g);
+    float l = texture2D(F, uv + vec2(-FT.x, 0.0)).r;
+    float r = texture2D(F, uv + vec2( FT.x, 0.0)).r;
+    float d = texture2D(F, uv + vec2(0.0, -FT.y)).r;
+    float u = texture2D(F, uv + vec2(0.0,  FT.y)).r;
+    return vec2((r - l) * 0.5, (u - d) * 0.5);
+  }
+  float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+`;
+
+const QUAD_VERT = /* glsl */ `
+  varying vec2 vUv;
+  void main(){ vUv = uv; gl_Position = vec4(position, 1.0); }
+`;
+
+const INIT_FRAG = COMMON + /* glsl */ `
+  uniform float uSeed;
+  varying vec2 vUv;
   void main(){
-    vA = aAlpha;
-    vec4 mv = modelViewMatrix * vec4(position, 1.0);
-    gl_PointSize = uSize * aAlpha * (260.0 / -mv.z);
-    gl_Position = projectionMatrix * mv;
-  }`;
+    float r1 = hash(vUv * 13.1 + uSeed);
+    float r2 = hash(vUv * 71.7 + uSeed * 1.7);
+    float r3 = hash(vUv * 43.3 + uSeed * 0.3);
+    float r4 = hash(vUv * 91.1 + uSeed * 2.1);
+    float maxLife = 1.2 + r3 * 2.4;
+    vec2 g = vec2(1.0) + vec2(r1, r2) * (GM - 2.0);
+    gl_FragColor = vec4(g / GM, r4 * maxLife, maxLife); // vida escalonada
+  }
+`;
 
-const pointFrag = (falloff: number, gain: number) => /* glsl */ `
+const ADVECT_FRAG = COMMON + /* glsl */ `
+  uniform sampler2D uState, uField, uBC;
+  uniform float uDt, uTime;
+  varying vec2 vUv;
+  void main(){
+    vec4 s = texture2D(uState, vUv);
+    vec2 g = s.xy * GM;
+    float life = s.z, maxLife = s.w;
+    bool dead = life > maxLife;
+
+    g -= fgrad(uField, g) * ${SPEED.toFixed(1)} * uDt; // flujo por −∇φ
+    life += uDt;
+
+    bool oob = g.x < 1.0 || g.x > GX - 1.0 || g.y < 1.0 || g.y > GY - 1.0;
+    float fx = texture2D(uBC, fuv(clamp(g, vec2(1.0), GM - 1.0))).g;
+
+    if (dead || oob || fx > 0.5) {          // muere por vida, borde o carga
+      float r1 = hash(vUv * 13.1 + uTime);
+      float r2 = hash(vUv * 71.7 + uTime * 1.7);
+      float r3 = hash(vUv * 43.3 + uTime * 0.3);
+      maxLife = 1.2 + r3 * 2.4;
+      g = vec2(1.0) + vec2(r1, r2) * (GM - 2.0);
+      life = 0.0;
+    }
+    gl_FragColor = vec4(g / GM, life, maxLife);
+  }
+`;
+
+const HEADS_VERT = COMMON + /* glsl */ `
+  uniform sampler2D uState, uField;
+  uniform float uSize;
+  attribute vec2 aRef;
+  varying float vA;
+  void main(){
+    vec4 s = texture2D(uState, aRef);
+    vec2 g = s.xy * GM;
+    float t = s.z / max(s.w, 1e-3);
+    float fade = min(1.0, t * 6.0) * min(1.0, (1.0 - t) * 4.0);
+    float gMag = min(1.0, length(fgrad(uField, g)) * 5.0);
+    vA = (0.35 + 0.65 * gMag) * fade;
+    float phi = texture2D(uField, fuv(g)).r;
+    vec4 mv = modelViewMatrix * vec4((g.x/GX-0.5)*PW, phi*HS+0.04, (g.y/GY-0.5)*PH, 1.0);
+    gl_PointSize = uSize * vA * (260.0 / -mv.z);
+    gl_Position = projectionMatrix * mv;
+  }
+`;
+
+const TRAILS_VERT = COMMON + /* glsl */ `
+  uniform sampler2D uState, uField;
+  uniform float uSize;
+  attribute vec2 aRef;
+  attribute float aT;
+  varying float vA;
+  void main(){
+    vec4 s = texture2D(uState, aRef);
+    vec2 g = s.xy * GM;
+    float t = s.z / max(s.w, 1e-3);
+    float fade = min(1.0, t * 6.0) * min(1.0, (1.0 - t) * 4.0);
+    // reintegra hacia atrás (+∇φ) la línea de campo desde la cabeza
+    for (int k = 0; k < ${TRAIL_LEN}; k++) {
+      if (float(k) >= aT) break;
+      g += fgrad(uField, g) * ${SPEED.toFixed(1)} * ${TRAIL_DT};
+      g = clamp(g, vec2(1.0), GM - 1.0);
+    }
+    float decay = 1.0 - aT / float(${TRAIL_LEN});
+    vA = fade * decay * 0.6;
+    float phi = texture2D(uField, fuv(g)).r;
+    vec4 mv = modelViewMatrix * vec4((g.x/GX-0.5)*PW, phi*HS+0.04, (g.y/GY-0.5)*PH, 1.0);
+    gl_PointSize = uSize * max(vA, 0.0) * (260.0 / -mv.z);
+    gl_Position = projectionMatrix * mv;
+  }
+`;
+
+const glowFrag = (falloff: number, gain: number) => /* glsl */ `
   varying float vA;
   uniform vec3 uColor;
   void main(){
+    if (vA <= 0.001) discard;
     vec2 d = gl_PointCoord - 0.5;
-    float r = dot(d, d);
-    float a = exp(-r * ${falloff.toFixed(1)});
+    float a = exp(-dot(d, d) * ${falloff.toFixed(1)});
     gl_FragColor = vec4(uColor * a * vA * ${gain.toFixed(2)}, a * vA * ${gain.toFixed(2)});
-  }`;
+  }
+`;
+
+function makeState(): THREE.WebGLRenderTarget {
+  // FloatType sería ideal para la precisión de posición, pero HalfFloat es
+  // mucho más compatible; el campo se asienta lento y el jitter es invisible.
+  return new THREE.WebGLRenderTarget(PW, PH, {
+    type: THREE.HalfFloatType,
+    format: THREE.RGBAFormat,
+    minFilter: THREE.NearestFilter,
+    magFilter: THREE.NearestFilter,
+    wrapS: THREE.ClampToEdgeWrapping,
+    wrapT: THREE.ClampToEdgeWrapping,
+    depthBuffer: false,
+    stencilBuffer: false,
+  });
+}
 
 export function createParticles(
-  phi: Float32Array,
-  fixed: Uint8Array,
+  renderer: THREE.WebGLRenderer,
+  bcTexture: THREE.Texture,
 ): {
   points: THREE.Points;
   trails: THREE.Points;
-  update: (dt: number) => void;
-  respawnAll: () => void;
+  update: (dt: number, field: THREE.Texture) => void;
+  reseed: () => void;
 } {
-  const partI = new Float32Array(N_PART);
-  const partJ = new Float32Array(N_PART);
-  const partLife = new Float32Array(N_PART);
-  const partMaxLife = new Float32Array(N_PART);
-  const partPos = new Float32Array(N_PART * 3);
-  const partAlphaArr = new Float32Array(N_PART);
+  let sA = makeState();
+  let sB = makeState();
 
-  const trailPos = new Float32Array(N_PART * TRAIL_LEN * 3);
-  const trailAlpha = new Float32Array(N_PART * TRAIL_LEN);
-  const trailHead = new Uint8Array(N_PART);
+  // Escena GPGPU (quad fullscreen) para los pases de init/advección.
+  const gpScene = new THREE.Scene();
+  const gpCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
+  gpScene.add(quad);
 
-  function spawnParticle(idx: number): void {
-    partI[idx] = 1 + Math.random() * (NX - 3);
-    partJ[idx] = 1 + Math.random() * (NY - 3);
-    partLife[idx] = 0;
-    partMaxLife[idx] = 1.2 + Math.random() * 2.4;
-    const wx = (partI[idx] / (NX - 1) - 0.5) * PLANE_W;
-    const wz = (partJ[idx] / (NY - 1) - 0.5) * PLANE_H;
-    for (let t = 0; t < TRAIL_LEN; t++) {
-      const off = (idx * TRAIL_LEN + t) * 3;
-      trailPos[off] = wx;
-      trailPos[off + 1] = 0;
-      trailPos[off + 2] = wz;
-      trailAlpha[idx * TRAIL_LEN + t] = 0;
-    }
-    trailHead[idx] = 0;
-  }
-  for (let i = 0; i < N_PART; i++) spawnParticle(i);
-
-  /* ---- Sampling de ∇φ y φ (bilinear) ---- */
-  function sampleGradient(fi: number, fj: number, out: [number, number]): void {
-    const i0 = Math.floor(fi);
-    const j0 = Math.floor(fj);
-    const u = fi - i0;
-    const v = fj - j0;
-    const i1 = i0 + 1;
-    const j1 = j0 + 1;
-    if (i0 < 1 || i1 >= NX - 1 || j0 < 1 || j1 >= NY - 1) {
-      out[0] = 0;
-      out[1] = 0;
-      return;
-    }
-    const gx00 = (phi[j0 * NX + i0 + 1] - phi[j0 * NX + i0 - 1]) * 0.5;
-    const gx10 = (phi[j0 * NX + i1 + 1] - phi[j0 * NX + i1 - 1]) * 0.5;
-    const gx01 = (phi[j1 * NX + i0 + 1] - phi[j1 * NX + i0 - 1]) * 0.5;
-    const gx11 = (phi[j1 * NX + i1 + 1] - phi[j1 * NX + i1 - 1]) * 0.5;
-    const gy00 = (phi[(j0 + 1) * NX + i0] - phi[(j0 - 1) * NX + i0]) * 0.5;
-    const gy10 = (phi[(j0 + 1) * NX + i1] - phi[(j0 - 1) * NX + i1]) * 0.5;
-    const gy01 = (phi[(j1 + 1) * NX + i0] - phi[(j1 - 1) * NX + i0]) * 0.5;
-    const gy11 = (phi[(j1 + 1) * NX + i1] - phi[(j1 - 1) * NX + i1]) * 0.5;
-    out[0] =
-      (1 - u) * (1 - v) * gx00 + u * (1 - v) * gx10 + (1 - u) * v * gx01 + u * v * gx11;
-    out[1] =
-      (1 - u) * (1 - v) * gy00 + u * (1 - v) * gy10 + (1 - u) * v * gy01 + u * v * gy11;
-  }
-
-  function samplePhi(fi: number, fj: number): number {
-    const i0 = Math.floor(fi);
-    const j0 = Math.floor(fj);
-    if (i0 < 0 || i0 >= NX - 1 || j0 < 0 || j0 >= NY - 1) return 0;
-    const u = fi - i0;
-    const v = fj - j0;
-    const a = phi[j0 * NX + i0];
-    const b = phi[j0 * NX + i0 + 1];
-    const c = phi[(j0 + 1) * NX + i0];
-    const d = phi[(j0 + 1) * NX + i0 + 1];
-    return (1 - u) * (1 - v) * a + u * (1 - v) * b + (1 - u) * v * c + u * v * d;
-  }
-
-  /* ---- Geometrías + materiales ---- */
-  const partGeom = new THREE.BufferGeometry();
-  const partPosAttr = new THREE.BufferAttribute(partPos, 3);
-  const partAlphaAttr = new THREE.BufferAttribute(partAlphaArr, 1);
-  partPosAttr.setUsage(THREE.DynamicDrawUsage);
-  partAlphaAttr.setUsage(THREE.DynamicDrawUsage);
-  partGeom.setAttribute("position", partPosAttr);
-  partGeom.setAttribute("aAlpha", partAlphaAttr);
-
-  const partMat = new THREE.ShaderMaterial({
+  const initMat = new THREE.ShaderMaterial({
+    uniforms: { uSeed: { value: 0 } },
+    vertexShader: QUAD_VERT,
+    fragmentShader: INIT_FRAG,
+    depthTest: false,
+    depthWrite: false,
+  });
+  const advectMat = new THREE.ShaderMaterial({
     uniforms: {
-      uColor: { value: new THREE.Color(0xf0a95c) },
-      uSize: { value: 6.5 },
+      uState: { value: null },
+      uField: { value: null },
+      uBC: { value: bcTexture },
+      uDt: { value: 0 },
+      uTime: { value: 0 },
     },
-    vertexShader: POINT_VERT,
-    fragmentShader: pointFrag(14.0, 1.0),
+    vertexShader: QUAD_VERT,
+    fragmentShader: ADVECT_FRAG,
+    depthTest: false,
+    depthWrite: false,
+  });
+
+  function renderTo(target: THREE.WebGLRenderTarget, mat: THREE.Material): void {
+    quad.material = mat;
+    renderer.setRenderTarget(target);
+    renderer.render(gpScene, gpCam);
+    renderer.setRenderTarget(null);
+  }
+
+  // Geometrías de render (posición ficticia; la real se calcula en el vertex).
+  const headsGeo = new THREE.BufferGeometry();
+  const ref = new Float32Array(NP * 2);
+  for (let p = 0; p < NP; p++) {
+    ref[p * 2] = ((p % PW) + 0.5) / PW;
+    ref[p * 2 + 1] = (Math.floor(p / PW) + 0.5) / PH;
+  }
+  headsGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(NP * 3), 3));
+  headsGeo.setAttribute("aRef", new THREE.BufferAttribute(ref, 2));
+
+  const M = NP * TRAIL_LEN;
+  const tref = new Float32Array(M * 2);
+  const tT = new Float32Array(M);
+  for (let p = 0, i = 0; p < NP; p++) {
+    const u = ((p % PW) + 0.5) / PW;
+    const v = (Math.floor(p / PW) + 0.5) / PH;
+    for (let t = 0; t < TRAIL_LEN; t++, i++) {
+      tref[i * 2] = u;
+      tref[i * 2 + 1] = v;
+      tT[i] = t;
+    }
+  }
+  const trailsGeo = new THREE.BufferGeometry();
+  trailsGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(M * 3), 3));
+  trailsGeo.setAttribute("aRef", new THREE.BufferAttribute(tref, 2));
+  trailsGeo.setAttribute("aT", new THREE.BufferAttribute(tT, 1));
+
+  const bigSphere = new THREE.Sphere(new THREE.Vector3(), Math.max(PLANE_W, PLANE_H) + 6);
+  headsGeo.boundingSphere = bigSphere;
+  trailsGeo.boundingSphere = bigSphere;
+
+  const amber = new THREE.Color(0xf0a95c);
+  const headsMat = new THREE.ShaderMaterial({
+    uniforms: { uState: { value: null }, uField: { value: null }, uColor: { value: amber }, uSize: { value: 6.5 } },
+    vertexShader: HEADS_VERT,
+    fragmentShader: glowFrag(14.0, 1.0),
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
   });
-  const points = new THREE.Points(partGeom, partMat);
+  const trailsMat = new THREE.ShaderMaterial({
+    uniforms: { uState: { value: null }, uField: { value: null }, uColor: { value: amber }, uSize: { value: 3.6 } },
+    vertexShader: TRAILS_VERT,
+    fragmentShader: glowFrag(10.0, 0.7),
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+
+  const points = new THREE.Points(headsGeo, headsMat);
+  const trails = new THREE.Points(trailsGeo, trailsMat);
   points.frustumCulled = false;
-
-  const trailGeom = new THREE.BufferGeometry();
-  const trailPosAttr = new THREE.BufferAttribute(trailPos, 3);
-  const trailAlphaAttr = new THREE.BufferAttribute(trailAlpha, 1);
-  trailPosAttr.setUsage(THREE.DynamicDrawUsage);
-  trailAlphaAttr.setUsage(THREE.DynamicDrawUsage);
-  trailGeom.setAttribute("position", trailPosAttr);
-  trailGeom.setAttribute("aAlpha", trailAlphaAttr);
-  const trailMat = new THREE.ShaderMaterial({
-    uniforms: {
-      uColor: { value: new THREE.Color(0xf0a95c) },
-      uSize: { value: 3.6 },
-    },
-    vertexShader: POINT_VERT,
-    fragmentShader: pointFrag(10.0, 0.7),
-    transparent: true,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
-  });
-  const trails = new THREE.Points(trailGeom, trailMat);
   trails.frustumCulled = false;
 
-  const tmpG: [number, number] = [0, 0];
-  function update(dt: number): void {
-    for (let p = 0; p < N_PART; p++) {
-      partLife[p] += dt;
-      if (partLife[p] > partMaxLife[p]) {
-        spawnParticle(p);
-        continue;
-      }
-      sampleGradient(partI[p], partJ[p], tmpG);
-      partI[p] -= tmpG[0] * SPEED * dt;
-      partJ[p] -= tmpG[1] * SPEED * dt;
+  let needsReseed = true;
+  let time = 0;
 
-      if (partI[p] < 1 || partI[p] >= NX - 1 || partJ[p] < 1 || partJ[p] >= NY - 1) {
-        spawnParticle(p);
-        continue;
-      }
-
-      // las líneas de campo E = −∇φ terminan en las cargas: si la partícula
-      // alcanza una celda Dirichlet (un polo pintado), renace.
-      if (fixed[(Math.round(partJ[p]) * NX + Math.round(partI[p]))]) {
-        spawnParticle(p);
-        continue;
-      }
-
-      const wx = (partI[p] / (NX - 1) - 0.5) * PLANE_W;
-      const wz = (partJ[p] / (NY - 1) - 0.5) * PLANE_H;
-      const wy = samplePhi(partI[p], partJ[p]) * HEIGHT_SCALE + 0.04;
-
-      partPos[3 * p] = wx;
-      partPos[3 * p + 1] = wy;
-      partPos[3 * p + 2] = wz;
-
-      const t = partLife[p] / partMaxLife[p];
-      const fade = Math.min(1, t * 6) * Math.min(1, (1 - t) * 4);
-      const gMag = Math.min(1, Math.hypot(tmpG[0], tmpG[1]) * 5);
-      partAlphaArr[p] = 0.35 + 0.65 * gMag * fade;
-
-      const h = trailHead[p];
-      const off = (p * TRAIL_LEN + h) * 3;
-      trailPos[off] = wx;
-      trailPos[off + 1] = wy;
-      trailPos[off + 2] = wz;
-      trailAlpha[p * TRAIL_LEN + h] = partAlphaArr[p];
-      trailHead[p] = (h + 1) % TRAIL_LEN;
-
-      const base = p * TRAIL_LEN;
-      for (let s = 0; s < TRAIL_LEN; s++) {
-        if (s !== h) trailAlpha[base + s] *= 0.86;
-      }
+  function update(dt: number, field: THREE.Texture): void {
+    if (needsReseed) {
+      initMat.uniforms.uSeed.value = Math.random() * 1000;
+      renderTo(sA, initMat);
+      needsReseed = false;
     }
-    partGeom.attributes.position.needsUpdate = true;
-    partGeom.attributes.aAlpha.needsUpdate = true;
-    trailGeom.attributes.position.needsUpdate = true;
-    trailGeom.attributes.aAlpha.needsUpdate = true;
+    const d = Math.min(dt, 0.05);
+    time += d;
+    advectMat.uniforms.uState.value = sA.texture;
+    advectMat.uniforms.uField.value = field;
+    advectMat.uniforms.uDt.value = d;
+    advectMat.uniforms.uTime.value = time;
+    renderTo(sB, advectMat);
+    [sA, sB] = [sB, sA];
+
+    headsMat.uniforms.uState.value = sA.texture;
+    headsMat.uniforms.uField.value = field;
+    trailsMat.uniforms.uState.value = sA.texture;
+    trailsMat.uniforms.uField.value = field;
   }
 
-  function respawnAll(): void {
-    for (let i = 0; i < N_PART; i++) spawnParticle(i);
+  function reseed(): void {
+    needsReseed = true;
   }
 
-  return { points, trails, update, respawnAll };
+  return { points, trails, update, reseed };
 }
