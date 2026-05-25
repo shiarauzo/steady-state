@@ -19,9 +19,15 @@
     --rule:rgba(240,169,92,0.18);
   }
   *{box-sizing:border-box}
-  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);overflow:hidden;
+  html,body{margin:0;height:100%;color:var(--ink);overflow:hidden;
     font-family:'Spectral',serif;font-weight:300;
     -webkit-font-smoothing:antialiased;
+    /* atmósfera: glow ámbar tenue hacia el horizonte sobre negro.
+       El canvas se dibuja con fondo transparente y deja ver esto donde
+       no hay superficie (el "cielo"). */
+    background:
+      radial-gradient(ellipse 95% 60% at 50% 46%, rgba(240,169,92,0.11), rgba(7,8,13,0) 62%),
+      var(--bg);
   }
   canvas#c{position:fixed;inset:0;display:block;cursor:crosshair}
 
@@ -214,17 +220,20 @@ function resetField() {
    visual sin entrar en conflicto con la interacción de pintado.
    ============================================================= */
 const canvas = document.getElementById('c');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true, alpha:true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-renderer.setClearColor(0x07080d, 1);
+renderer.setClearColor(0x07080d, 0);   // transparente: deja ver la atmósfera CSS
 
 const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0x07080d, 12, 26);
 
-const camera = new THREE.PerspectiveCamera(38, innerWidth/innerHeight, 0.1, 80);
-const CAM_BASE = new THREE.Vector3(0, 7.2, 11.5);
-camera.position.copy(CAM_BASE);
-camera.lookAt(0, 0, 0);
+const camera = new THREE.PerspectiveCamera(38, innerWidth/innerHeight, 0.1, 120);
+// Picado moderado (~52° sobre la horizontal): el plano llena el cuadro pero
+// conserva el relieve 3D. Dirección unitaria desde el objetivo hacia la cámara.
+const CAM_DIR    = new THREE.Vector3(0, 0.79, 0.615);   // sin52°, cos52°
+const CAM_TARGET = new THREE.Vector3(0, 0.15, 0);
+const CAM_BASE   = new THREE.Vector3();   // posición base, recomputada en fitCamera()
+let   camDist    = 12;
 
 // Iluminación: hemisférica cálida (ámbar arriba, azul noche abajo) +
 // direccional rasante para acentuar el relieve. Un toque frío opuesto
@@ -750,11 +759,30 @@ iterInput.oninput = e => { iterPerFrame = +e.target.value; iterVal.textContent =
 /* =============================================================
    RESIZE + LOOP
    ============================================================= */
+function fitCamera() {
+  // Calcula la distancia de cámara para que el plano (PLANE_W × PLANE_H) llene
+  // el cuadro en cualquier aspect ratio. Tomamos el máximo de la distancia que
+  // satura el ancho y la que satura la profundidad (esta última escorzada por
+  // el seno del ángulo de picado, CAM_DIR.y).
+  const aspect = camera.aspect;
+  const vFOV   = camera.fov * Math.PI / 180;
+  const hFOV   = 2 * Math.atan(Math.tan(vFOV / 2) * aspect);
+  const margin = 1.12;
+  const distW  = (PLANE_W * 0.5 * margin)            / Math.tan(hFOV / 2);
+  const distH  = (PLANE_H * 0.5 * CAM_DIR.y * margin) / Math.tan(vFOV / 2);
+  camDist = Math.max(distW, distH);
+  CAM_BASE.copy(CAM_DIR).multiplyScalar(camDist).add(CAM_TARGET);
+  // niebla relativa a la distancia: funde el borde lejano sin tragarse el campo
+  scene.fog.near = camDist * 0.6;
+  scene.fog.far  = camDist * 2.6;
+}
+
 function onResize() {
   const w = innerWidth, h = innerHeight;
   renderer.setSize(w, h, false);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
+  fitCamera();
 }
 addEventListener('resize', onResize);
 onResize();
@@ -789,7 +817,7 @@ function frame() {
   camera.position.x = CAM_BASE.x + Math.sin(now * 0.13) * 0.45;
   camera.position.z = CAM_BASE.z + Math.cos(now * 0.11) * 0.35;
   camera.position.y = CAM_BASE.y + Math.sin(now * 0.07) * 0.12;
-  camera.lookAt(0, 0, 0);
+  camera.lookAt(CAM_TARGET);
 
   iterate(iterPerFrame);
   updateSurface();
