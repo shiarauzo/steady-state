@@ -308,12 +308,6 @@ function stop(): void {
   raf = 0;
 }
 
-// Pausa cuando la pestaña no es visible (ahorra GPU/batería).
-document.addEventListener("visibilitychange", () => {
-  if (document.hidden) stop();
-  else start();
-});
-
 // Pérdida de contexto WebGL (sleep, presión de memoria, cambio de GPU):
 // detén el loop para no spamear errores; al restaurarse, recarga limpio.
 canvas.addEventListener("webglcontextlost", (e) => {
@@ -325,6 +319,12 @@ canvas.addEventListener("webglcontextrestored", () => location.reload());
 // Si el dispositivo no puede renderizar a float/half-float, el campo no existe:
 // degradamos a la ecuación estática (CSS) en vez de un canvas negro.
 if (solver.supported) {
+  // Pausa cuando la pestaña no es visible (ahorra GPU/batería). Solo si hay
+  // loop que pausar: en el path no soportado no debe arrancar nada.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) stop();
+    else start();
+  });
   start();
 } else {
   document.body.classList.add("nofield");
