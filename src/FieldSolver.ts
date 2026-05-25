@@ -62,6 +62,7 @@ void main(){
 
   float avg = 0.25 * (l + r + d + u);
   float next = phi + uOmega * (avg - phi);
+  next = clamp(next, -1.2, 1.2); // contiene el overshoot de SOR al pintar polos opuestos
   gl_FragColor = vec4(next, 0.0, 0.0, 1.0);
 }
 `;

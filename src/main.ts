@@ -3,7 +3,6 @@ import { NX, NY, PLANE_W, PLANE_H } from "./constants";
 import { FieldSolver } from "./FieldSolver";
 import { createSurface } from "./surface";
 import { createParticles } from "./particles";
-import { createIso } from "./iso";
 import { seedEquation } from "./seedEquation";
 
 /* =============================================================
@@ -22,9 +21,14 @@ const renderer = new THREE.WebGLRenderer({
   // el canvas de forma determinista (QA, screenshots). Coste despreciable aquí.
   preserveDrawingBuffer: true,
 });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+// pixel ratio adaptativo: cap bajo en pantallas táctiles (fill-rate caro en móvil)
+const PR_CAP = matchMedia("(pointer:coarse)").matches ? 1.5 : 2;
+renderer.setPixelRatio(Math.min(devicePixelRatio, PR_CAP));
 renderer.setClearColor(0x07080d, 0); // transparente: deja ver la atmósfera CSS
 renderer.autoClear = true;
+// AgX tone mapping: HDR→LDR moderno; preserva los highlights cálidos sin quemar
+renderer.toneMapping = THREE.AgXToneMapping;
+renderer.toneMappingExposure = 1.35;
 
 const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0x07080d, 12, 26);
@@ -70,8 +74,8 @@ const particles = createParticles(solver.phi);
 scene.add(particles.points);
 scene.add(particles.trails);
 
-const iso = createIso(solver.phi);
-scene.add(iso.lines);
+// (Las equipotenciales ahora se dibujan en screen-space dentro del shader de
+// la superficie — ya no hay marching squares en CPU ni objeto aparte.)
 
 // Plano invisible para picking: pintar sobre la "sombra" del relieve evita
 // oclusiones contraintuitivas cuando el campo se levanta.
@@ -84,7 +88,6 @@ const pickMesh = new THREE.Mesh(
 scene.add(pickMesh);
 
 const showParticles = true;
-const showIso = true;
 
 /* =============================================================
    PICKING + PINTADO de condiciones Dirichlet
@@ -259,7 +262,7 @@ const SWAY = matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 1;
    ============================================================= */
 const t0 = performance.now() / 1000;
 let prevT = t0;
-let isoFrame = 0;
+let raf = 0;
 
 function frame(): void {
   const now = performance.now() / 1000;
@@ -283,16 +286,37 @@ function frame(): void {
   solver.step();
   setFieldTexture(solver.fieldTexture);
 
-  // 2) descarga del campo para partículas e iso (CPU)
+  // 2) descarga del campo para partículas (CPU); las iso ya van en el shader
   solver.readback();
 
   if (showParticles) particles.update(dt);
-  if (showIso) {
-    isoFrame++;
-    if (isoFrame % 6 === 0) iso.rebuild();
-  }
 
   renderer.render(scene, camera);
-  requestAnimationFrame(frame);
+  raf = requestAnimationFrame(frame);
 }
-requestAnimationFrame(frame);
+
+function start(): void {
+  if (raf) return;
+  prevT = performance.now() / 1000; // evita un dt gigante al reanudar
+  raf = requestAnimationFrame(frame);
+}
+function stop(): void {
+  if (raf) cancelAnimationFrame(raf);
+  raf = 0;
+}
+
+// Pausa cuando la pestaña no es visible (ahorra GPU/batería).
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) stop();
+  else start();
+});
+
+// Pérdida de contexto WebGL (sleep, presión de memoria, cambio de GPU):
+// detén el loop para no spamear errores; al restaurarse, recarga limpio.
+canvas.addEventListener("webglcontextlost", (e) => {
+  e.preventDefault();
+  stop();
+});
+canvas.addEventListener("webglcontextrestored", () => location.reload());
+
+start();
