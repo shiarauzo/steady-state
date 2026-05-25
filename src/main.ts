@@ -104,6 +104,7 @@ const mouse = {
 // Sigilo de la condición Dirichlet: ±φ siguiendo el cursor al pintar (issue #9).
 const sig = document.getElementById("sig") as HTMLDivElement;
 function showSig(e: PointerEvent): void {
+  if (mouse.button === 1) return; // botón central no pinta: tampoco sigilo
   sig.textContent = mouse.button === 2 ? "−φ" : "+φ";
   sig.style.left = `${e.clientX}px`;
   sig.style.top = `${e.clientY}px`;
@@ -112,6 +113,7 @@ function showSig(e: PointerEvent): void {
 
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 canvas.addEventListener("pointerdown", (e) => {
+  canvas.setPointerCapture(e.pointerId); // traza continua aunque el cursor salga
   mouse.down = true;
   mouse.button = e.button;
   mouse.hasLast = false;

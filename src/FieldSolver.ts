@@ -197,6 +197,7 @@ export class FieldSolver {
   /** Libera una celda Dirichlet: vuelve a ser interior y relaja (issue #11). */
   unfix(k: number): void {
     this.fixed[k] = 0;
+    this.phiFix[k] = 0; // si luego se pinta aquí, blendFixed parte de 0, no de la tinta
     this.bcData[k * 4 + 1] = 0;
     this.bcTex.needsUpdate = true;
   }

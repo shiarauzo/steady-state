@@ -30,7 +30,9 @@ export function seedEquation(solver: FieldSolver): () => void {
   // ajustar el tamaño para llenar ~78% del ancho de la malla
   let size = Math.round(NY * 0.6);
   ctx.font = `600 ${size}px Georgia, "Times New Roman", serif`;
-  size = Math.max(8, Math.floor((size * (NX * 0.78)) / ctx.measureText(txt).width));
+  const measured = ctx.measureText(txt).width;
+  // measured puede ser 0 si la fuente aún no resolvió (headless): evita Infinity
+  if (measured > 0) size = Math.max(8, Math.floor((size * (NX * 0.78)) / measured));
   ctx.font = `600 ${size}px Georgia, "Times New Roman", serif`;
   ctx.fillText(txt, NX / 2, NY / 2 + 1);
 
