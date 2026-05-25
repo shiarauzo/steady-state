@@ -5,11 +5,6 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Laplace — el campo que se asienta</title>
 
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,300;0,400;1,300&family=IBM+Plex+Mono:wght@300;400&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
-
 <style>
   :root{
     --bg:#07080d;
@@ -19,61 +14,17 @@
     --rule:rgba(240,169,92,0.18);
   }
   *{box-sizing:border-box}
-  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);overflow:hidden;
+  html,body{margin:0;height:100%;color:var(--ink);overflow:hidden;
     font-family:'Spectral',serif;font-weight:300;
     -webkit-font-smoothing:antialiased;
+    /* atmósfera: glow ámbar tenue hacia el horizonte sobre negro.
+       El canvas se dibuja con fondo transparente y deja ver esto donde
+       no hay superficie (el "cielo"). */
+    background:
+      radial-gradient(ellipse 95% 60% at 50% 46%, rgba(240,169,92,0.11), rgba(7,8,13,0) 62%),
+      var(--bg);
   }
   canvas#c{position:fixed;inset:0;display:block;cursor:crosshair}
-
-  /* --- overlays --- */
-  .layer{position:fixed;pointer-events:none;z-index:5}
-
-  #title{top:34px;left:0;right:0;text-align:center;letter-spacing:0.42em;
-    font-size:11px;text-transform:uppercase;color:var(--ink-dim)}
-  #title b{color:var(--amber);font-weight:400;letter-spacing:0.5em}
-
-  #eq-main{top:60px;left:54px;width:230px}
-  #eq-main .katex{font-size:46px;color:var(--ink)}
-  #eq-main .caption{margin-top:14px;font-family:'IBM Plex Mono',monospace;font-size:10px;
-    letter-spacing:0.22em;color:var(--ink-dim);text-transform:uppercase}
-
-  #eq-discrete{bottom:46px;left:54px;max-width:380px;font-family:'IBM Plex Mono',monospace;
-    font-size:12px;line-height:1.7;color:var(--ink-dim);font-weight:300}
-  #eq-discrete .k{color:var(--amber)}
-  #eq-discrete .lbl{font-family:'Spectral',serif;font-style:italic;font-size:11px;
-    letter-spacing:0.18em;text-transform:uppercase;color:var(--ink-dim);margin-bottom:8px;display:block}
-
-  #ui{top:54px;right:54px;pointer-events:auto;display:flex;flex-direction:column;gap:14px;
-    align-items:flex-end;font-family:'IBM Plex Mono',monospace;font-size:10.5px;
-    letter-spacing:0.18em;text-transform:uppercase;color:var(--ink-dim)}
-  #ui .row{display:flex;align-items:center;gap:10px}
-  #ui button{background:transparent;border:1px solid var(--rule);color:var(--ink);
-    padding:7px 16px;font:inherit;letter-spacing:0.22em;cursor:pointer;
-    transition:background .25s,color .25s,border-color .25s}
-  #ui button:hover{background:var(--amber);color:#1a0f04;border-color:var(--amber)}
-  #ui label{cursor:pointer;display:flex;align-items:center;gap:8px;user-select:none}
-  #ui input[type=checkbox]{appearance:none;-webkit-appearance:none;width:11px;height:11px;
-    border:1px solid var(--rule);background:transparent;display:inline-block;position:relative;cursor:pointer}
-  #ui input[type=checkbox]:checked{background:var(--amber);border-color:var(--amber)}
-  #ui input[type=range]{-webkit-appearance:none;appearance:none;background:transparent;width:120px;height:14px}
-  #ui input[type=range]::-webkit-slider-runnable-track{height:1px;background:var(--rule)}
-  #ui input[type=range]::-moz-range-track{height:1px;background:var(--rule)}
-  #ui input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:9px;height:9px;
-    background:var(--amber);margin-top:-4px;cursor:pointer;border-radius:0}
-  #ui input[type=range]::-moz-range-thumb{width:9px;height:9px;background:var(--amber);
-    border:0;cursor:pointer;border-radius:0}
-  #ui .val{color:var(--amber);min-width:24px;text-align:right}
-
-  #hint{bottom:46px;right:54px;font-family:'IBM Plex Mono',monospace;font-size:10px;
-    letter-spacing:0.22em;color:var(--ink-dim);text-align:right;line-height:1.9;text-transform:uppercase}
-  #hint b{color:var(--amber);font-weight:400}
-
-  /* corner ticks — vintage instrument feel */
-  .tick{position:fixed;width:18px;height:18px;border:1px solid var(--rule);pointer-events:none;z-index:4}
-  .tick.tl{top:24px;left:24px;border-right:0;border-bottom:0}
-  .tick.tr{top:24px;right:24px;border-left:0;border-bottom:0}
-  .tick.bl{bottom:24px;left:24px;border-right:0;border-top:0}
-  .tick.br{bottom:24px;right:24px;border-left:0;border-top:0}
 
   /* vignette + grain */
   #vignette{position:fixed;inset:0;pointer-events:none;z-index:3;
@@ -81,66 +32,14 @@
   #grain{position:fixed;inset:0;pointer-events:none;z-index:6;opacity:0.08;mix-blend-mode:overlay;
     background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.95  0 0 0 0 0.85  0 0 0 0 0.65  0 0 0 1 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>")}
 
-  /* footer rule */
-  #footer{position:fixed;left:54px;right:54px;bottom:30px;height:1px;background:var(--rule);z-index:4;pointer-events:none}
-  #footer-l{position:fixed;left:54px;bottom:14px;font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:0.32em;color:var(--ink-dim);text-transform:uppercase;z-index:4;pointer-events:none}
-  #footer-r{position:fixed;right:54px;bottom:14px;font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:0.32em;color:var(--ink-dim);text-transform:uppercase;z-index:4;pointer-events:none}
-
-  @media (max-width:760px){
-    #eq-main{left:24px;width:180px}
-    #eq-main .katex{font-size:32px}
-    #eq-discrete{left:24px;font-size:10px;max-width:300px;bottom:60px}
-    #ui{right:24px;top:80px;font-size:9.5px}
-    #hint{right:24px;bottom:60px;font-size:9px}
-    #footer{left:24px;right:24px}
-    #footer-l{left:24px}#footer-r{right:24px}
-    #title{font-size:9.5px;letter-spacing:0.3em}
-  }
 </style>
 </head>
 <body>
 
 <canvas id="c"></canvas>
 
-<div class="tick tl"></div>
-<div class="tick tr"></div>
-<div class="tick bl"></div>
-<div class="tick br"></div>
-
-<div class="layer" id="title"><b>Laplace</b> &nbsp;·&nbsp; el campo que se asienta</div>
-
-<div class="layer" id="eq-main">
-  <div id="eq-render"></div>
-  <div class="caption">equilibrio · estado estacionario</div>
-</div>
-
-<div class="layer" id="eq-discrete">
-  <span class="lbl">forma discreta — promedio de vecinos</span>
-  φ<span class="k">ᵢⱼ</span> = <span class="k">¼</span> ( φ<span class="k">ᵢ₊₁ⱼ</span> + φ<span class="k">ᵢ₋₁ⱼ</span> + φ<span class="k">ᵢⱼ₊₁</span> + φ<span class="k">ᵢⱼ₋₁</span> )
-  <br><span style="opacity:0.65">Gauss–Seidel · SOR &nbsp;ω = 1.88</span>
-</div>
-
-<div id="ui">
-  <div class="row"><button id="reset">reset</button></div>
-  <div class="row"><label><input type="checkbox" id="tParticles" checked> particles</label></div>
-  <div class="row"><label><input type="checkbox" id="tIso" checked> equipotentials</label></div>
-  <div class="row"><label>iter/frame <input type="range" min="1" max="20" value="8" id="iter"><span class="val" id="iterVal">8</span></label></div>
-</div>
-
-<div class="layer" id="hint"><b>L</b> ·potencial alto<br><b>R</b> · potencial bajo<br>arrastra para pintar</div>
-
 <div id="vignette"></div>
 <div id="grain"></div>
-
-<div id="footer"></div>
-<div id="footer-l">∇·∇φ = 0 &nbsp;·&nbsp; relaxation method</div>
-<div id="footer-r">200 × 120 · float32</div>
-
-<script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
-<script>
-  katex.render("\\nabla^{2}\\varphi = 0", document.getElementById('eq-render'),
-    { displayMode:true, throwOnError:false });
-</script>
 
 <script type="module">
 import * as THREE from 'https://esm.sh/three@0.160.0';
@@ -214,17 +113,20 @@ function resetField() {
    visual sin entrar en conflicto con la interacción de pintado.
    ============================================================= */
 const canvas = document.getElementById('c');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true, alpha:true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-renderer.setClearColor(0x07080d, 1);
+renderer.setClearColor(0x07080d, 0);   // transparente: deja ver la atmósfera CSS
 
 const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0x07080d, 12, 26);
 
-const camera = new THREE.PerspectiveCamera(38, innerWidth/innerHeight, 0.1, 80);
-const CAM_BASE = new THREE.Vector3(0, 7.2, 11.5);
-camera.position.copy(CAM_BASE);
-camera.lookAt(0, 0, 0);
+const camera = new THREE.PerspectiveCamera(38, innerWidth/innerHeight, 0.1, 120);
+// Picado moderado (~52° sobre la horizontal): el plano llena el cuadro pero
+// conserva el relieve 3D. Dirección unitaria desde el objetivo hacia la cámara.
+const CAM_DIR    = new THREE.Vector3(0, 0.79, 0.615);   // sin52°, cos52°
+const CAM_TARGET = new THREE.Vector3(0, 0.15, 0);
+const CAM_BASE   = new THREE.Vector3();   // posición base, recomputada en fitCamera()
+let   camDist    = 12;
 
 // Iluminación: hemisférica cálida (ámbar arriba, azul noche abajo) +
 // direccional rasante para acentuar el relieve. Un toque frío opuesto
@@ -536,11 +438,6 @@ function advectParticles(dt) {
   trailGeom.attributes.aAlpha.needsUpdate   = true;
 }
 
-document.getElementById('tParticles').onchange = e => {
-  showParticles = e.target.checked;
-  particles.visible = showParticles;
-  trails.visible    = showParticles;
-};
 
 /* =============================================================
    EQUIPOTENCIALES — Marching Squares sobre la grilla
@@ -649,11 +546,6 @@ function rebuildIso() {
   isoGeom.attributes.position.needsUpdate = true;
 }
 
-document.getElementById('tIso').onchange = e => {
-  showIso = e.target.checked;
-  isoLines.visible = showIso;
-  if (showIso) rebuildIso();   // refresca al instante para evitar líneas stale
-};
 
 /* =============================================================
    PICKING + PINTADO
@@ -741,20 +633,33 @@ function paintBrush(fi, fj, sign) {
   }
 }
 
-document.getElementById('reset').onclick = () => resetField();
-
-const iterInput = document.getElementById('iter');
-const iterVal   = document.getElementById('iterVal');
-iterInput.oninput = e => { iterPerFrame = +e.target.value; iterVal.textContent = iterPerFrame; };
-
 /* =============================================================
    RESIZE + LOOP
    ============================================================= */
+function fitCamera() {
+  // Calcula la distancia de cámara para que el plano (PLANE_W × PLANE_H) llene
+  // el cuadro en cualquier aspect ratio. Tomamos el máximo de la distancia que
+  // satura el ancho y la que satura la profundidad (esta última escorzada por
+  // el seno del ángulo de picado, CAM_DIR.y).
+  const aspect = camera.aspect;
+  const vFOV   = camera.fov * Math.PI / 180;
+  const hFOV   = 2 * Math.atan(Math.tan(vFOV / 2) * aspect);
+  const margin = 1.12;
+  const distW  = (PLANE_W * 0.5 * margin)            / Math.tan(hFOV / 2);
+  const distH  = (PLANE_H * 0.5 * CAM_DIR.y * margin) / Math.tan(vFOV / 2);
+  camDist = Math.max(distW, distH);
+  CAM_BASE.copy(CAM_DIR).multiplyScalar(camDist).add(CAM_TARGET);
+  // niebla relativa a la distancia: funde el borde lejano sin tragarse el campo
+  scene.fog.near = camDist * 0.6;
+  scene.fog.far  = camDist * 2.6;
+}
+
 function onResize() {
   const w = innerWidth, h = innerHeight;
   renderer.setSize(w, h, false);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
+  fitCamera();
 }
 addEventListener('resize', onResize);
 onResize();
@@ -789,7 +694,7 @@ function frame() {
   camera.position.x = CAM_BASE.x + Math.sin(now * 0.13) * 0.45;
   camera.position.z = CAM_BASE.z + Math.cos(now * 0.11) * 0.35;
   camera.position.y = CAM_BASE.y + Math.sin(now * 0.07) * 0.12;
-  camera.lookAt(0, 0, 0);
+  camera.lookAt(CAM_TARGET);
 
   iterate(iterPerFrame);
   updateSurface();
