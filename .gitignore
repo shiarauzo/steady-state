@@ -1,4 +1,8 @@
 node_modules
 dist
+.vite
 .DS_Store
 *.local
+
+# artefacto transitorio del skill /qa (captura de la última corrida)
+.claude/skills/qa/last-run.png
