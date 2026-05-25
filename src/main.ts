@@ -71,8 +71,16 @@ scene.add(surfaceMesh);
 }
 
 const particles = createParticles(solver.phi, solver.fixed);
-scene.add(particles.points);
-scene.add(particles.trails);
+
+// prefers-reduced-motion: sin partículas en movimiento (queda el campo
+// contemplativo: relieve + equipotenciales) ni "respiración" de cámara.
+const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const SWAY = REDUCED ? 0 : 1;
+const showParticles = !REDUCED;
+if (showParticles) {
+  scene.add(particles.points);
+  scene.add(particles.trails);
+}
 
 // (Las equipotenciales ahora se dibujan en screen-space dentro del shader de
 // la superficie — ya no hay marching squares en CPU ni objeto aparte.)
@@ -86,8 +94,6 @@ const pickMesh = new THREE.Mesh(
   new THREE.MeshBasicMaterial({ visible: false }),
 );
 scene.add(pickMesh);
-
-const showParticles = true;
 
 /* =============================================================
    PICKING + PINTADO de condiciones Dirichlet
@@ -104,11 +110,11 @@ const mouse = {
   hasLast: false,
 };
 
-// Sigilo de la condición Dirichlet: ±φ siguiendo el cursor al pintar (issue #9).
+// Sigilo de la condición de contorno siguiendo el cursor: +φ / −φ al pintar,
+// ∅ al borrar (botón central) (issue #9).
 const sig = document.getElementById("sig") as HTMLDivElement;
 function showSig(e: PointerEvent): void {
-  if (mouse.button === 1) return; // botón central no pinta: tampoco sigilo
-  sig.textContent = mouse.button === 2 ? "−φ" : "+φ";
+  sig.textContent = mouse.button === 1 ? "∅" : mouse.button === 2 ? "−φ" : "+φ";
   sig.style.left = `${e.clientX}px`;
   sig.style.top = `${e.clientY}px`;
   sig.style.display = "block";
@@ -116,6 +122,7 @@ function showSig(e: PointerEvent): void {
 
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 canvas.addEventListener("pointerdown", (e) => {
+  if (e.button === 1) e.preventDefault(); // evita el autoscroll del botón central
   canvas.setPointerCapture(e.pointerId); // traza continua aunque el cursor salga
   mouse.down = true;
   mouse.button = e.button;
@@ -155,8 +162,10 @@ function paintAtMouse(): void {
   const p = hits[0].point;
   const fi = (p.x / PLANE_W + 0.5) * (NX - 1);
   const fj = (p.z / PLANE_H + 0.5) * (NY - 1);
-  const sign = mouse.button === 0 ? +1 : mouse.button === 2 ? -1 : 0;
-  if (sign === 0) return;
+  const erase = mouse.button === 1; // botón central = goma
+  const sign = mouse.button === 2 ? -1 : +1;
+  const apply = (bi: number, bj: number) =>
+    erase ? eraseBrush(bi, bj) : paintBrush(bi, bj, sign);
 
   if (mouse.hasLast) {
     const steps = Math.max(
@@ -165,23 +174,51 @@ function paintAtMouse(): void {
     );
     for (let s = 1; s <= steps; s++) {
       const u = s / steps;
-      paintBrush(
-        mouse.lastI + (fi - mouse.lastI) * u,
-        mouse.lastJ + (fj - mouse.lastJ) * u,
-        sign,
-      );
+      apply(mouse.lastI + (fi - mouse.lastI) * u, mouse.lastJ + (fj - mouse.lastJ) * u);
     }
   } else {
-    paintBrush(fi, fj, sign);
+    apply(fi, fj);
   }
   mouse.lastI = fi;
   mouse.lastJ = fj;
   mouse.hasLast = true;
 }
 
-const BRUSH_R = 4.5;
+// Radio de pincel ajustable con la rueda del ratón.
+let brushR = 4.5;
+canvas.addEventListener(
+  "wheel",
+  (e) => {
+    e.preventDefault();
+    brushR = Math.max(1.5, Math.min(22, brushR - Math.sign(e.deltaY)));
+  },
+  { passive: false },
+);
+
+function brushBounds(fi: number, fj: number, r: number) {
+  return {
+    i0: Math.max(1, Math.floor(fi - r)),
+    i1: Math.min(NX - 2, Math.ceil(fi + r)),
+    j0: Math.max(1, Math.floor(fj - r)),
+    j1: Math.min(NY - 2, Math.ceil(fj + r)),
+  };
+}
+
+function eraseBrush(fi: number, fj: number): void {
+  const r2 = brushR * brushR;
+  const { i0, i1, j0, j1 } = brushBounds(fi, fj, brushR);
+  for (let j = j0; j <= j1; j++) {
+    for (let i = i0; i <= i1; i++) {
+      const di = i - fi;
+      const dj = j - fj;
+      if (di * di + dj * dj > r2) continue;
+      solver.unfix(j * NX + i);
+    }
+  }
+}
+
 function paintBrush(fi: number, fj: number, sign: number): void {
-  const r = BRUSH_R;
+  const r = brushR;
   const r2 = r * r;
   const i0 = Math.max(1, Math.floor(fi - r));
   const i1 = Math.min(NX - 2, Math.ceil(fi + r));
@@ -228,8 +265,8 @@ function onResize(): void {
 addEventListener("resize", onResize);
 onResize();
 
-/* ---- Semilla: dos polos suaves para que se vea algo al cargar ---- */
-(function seed(): void {
+/* ---- Semilla y reinicio del campo ---- */
+function seedPoles(): void {
   const setBlob = (ci: number, cj: number, sign: number) => {
     const j0 = Math.max(1, cj - 7);
     const j1 = Math.min(NY - 2, cj + 7);
@@ -246,16 +283,28 @@ onResize();
   };
   setBlob(60, 60, +1);
   setBlob(140, 60, -1);
-})();
+}
 
-// La ecuación ∇²φ = 0 sembrada en el propio campo; se disolverá al converger,
-// asentándose sobre los dos polos (issue #11).
-const releaseEquation = seedEquation(solver);
-const DISSOLVE_AT = 4.5; // s tras la carga
+const DISSOLVE_AT = 4.5; // s tras la siembra
+let releaseEquation: () => void = () => {};
 let equationReleased = false;
+let seedT = 0;
 
-// Respeta prefers-reduced-motion: anula la "respiración" de cámara (issue #10).
-const SWAY = matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 1;
+// (Re)inicia el campo: limpia, siembra dos polos y la ecuación ∇²φ=0 (que se
+// disolverá sobre ellos), y reinicia las partículas. Al cargar y con la tecla R.
+function initField(now: number): void {
+  solver.reset();
+  seedPoles();
+  releaseEquation = seedEquation(solver); // se disuelve al converger (issue #11)
+  equationReleased = false;
+  seedT = now;
+  if (showParticles) particles.respawnAll();
+}
+
+// Tecla R: reinicio.
+addEventListener("keydown", (e) => {
+  if (e.key === "r" || e.key === "R") initField(performance.now() / 1000);
+});
 
 /* =============================================================
    LOOP
@@ -265,6 +314,8 @@ let prevT = t0;
 let raf = 0;
 let frameCount = 0;
 
+initField(t0); // siembra inicial (polos + ecuación)
+
 function frame(): void {
   frameCount++;
   const now = performance.now() / 1000;
@@ -272,8 +323,8 @@ function frame(): void {
   if (dt > 0.05) dt = 0.05;
   prevT = now;
 
-  // disuelve la ecuación sembrada una vez (issue #11)
-  if (!equationReleased && now - t0 > DISSOLVE_AT) {
+  // disuelve la ecuación sembrada una vez, relativo a la última siembra (issue #11)
+  if (!equationReleased && now - seedT > DISSOLVE_AT) {
     releaseEquation();
     equationReleased = true;
   }
