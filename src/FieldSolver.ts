@@ -37,9 +37,11 @@ varying vec2 vUv;
 void main(){
   float phi = texture2D(uField, vUv).r;
 
-  float fi = floor(vUv.x / uTexel.x);
-  float fj = floor(vUv.y / uTexel.y);
-  float parity = mod(fi + fj, 2.0);
+  // Paridad red-black desde gl_FragCoord (coord de texel exacta, robusta en
+  // cualquier GPU) en vez de reconstruir floor(uv/texel), que en hardware
+  // puede caer en el entero equivocado y decoplar el tablero → checkerboard.
+  vec2 px = floor(gl_FragCoord.xy);
+  float parity = mod(px.x + px.y, 2.0);
 
   // Celdas de la otra paridad pasan sin cambios (mitad del tablero por pasada).
   if (parity != uParity) {
@@ -74,6 +76,24 @@ void main(){
   gl_Position = vec4(position, 1.0);
 }
 `;
+
+/** Comprueba de verdad si se puede RENDERIZAR a RGBA32F (no basta getExtension:
+    algunos navegadores lo devuelven null aunque el hardware pueda, y otros al
+    revés). Creamos un FBO float 1×1 y miramos si queda completo. */
+function floatRenderable(gl: WebGL2RenderingContext): boolean {
+  gl.getExtension("EXT_color_buffer_float"); // habilita RGBA32F renderable si existe
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 1, 1, 0, gl.RGBA, gl.FLOAT, null);
+  const fb = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  const ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.deleteFramebuffer(fb);
+  gl.deleteTexture(tex);
+  return ok;
+}
 
 function makeTarget(type: THREE.TextureDataType): THREE.WebGLRenderTarget {
   // Preferimos Float32: HalfFloat (16F) cuantiza la altura en escalones
@@ -113,14 +133,21 @@ export class FieldSolver {
   constructor(renderer: THREE.WebGLRenderer) {
     this.renderer = renderer;
 
-    const gl = renderer.getContext();
-    const canFloat = !!gl.getExtension("EXT_color_buffer_float");
+    const gl = renderer.getContext() as WebGL2RenderingContext;
+    const canFloat = floatRenderable(gl);
     const canHalf = canFloat || !!gl.getExtension("EXT_color_buffer_half_float");
     this.supported = canHalf;
     // Float si se puede (relieve suave); si no, HalfFloat como fallback.
     const type = canFloat ? THREE.FloatType : THREE.HalfFloatType;
     this.rtA = makeTarget(type);
     this.rtB = makeTarget(type);
+
+    // Diagnóstico (visible en la consola del navegador): tipo de campo y GPU.
+    const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+    const gpu = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : "?";
+    console.info(
+      `[Laplace] campo: ${canFloat ? "Float32 (suave)" : "HalfFloat (fallback)"} · GPU: ${gpu}`,
+    );
 
     this.bcTex = new THREE.DataTexture(
       this.bcData,
