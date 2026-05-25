@@ -194,6 +194,13 @@ export class FieldSolver {
     this.bcTex.needsUpdate = true;
   }
 
+  /** Libera una celda Dirichlet: vuelve a ser interior y relaja (issue #11). */
+  unfix(k: number): void {
+    this.fixed[k] = 0;
+    this.bcData[k * 4 + 1] = 0;
+    this.bcTex.needsUpdate = true;
+  }
+
   /** Mezcla suave (pincel gaussiano) sobre el valor Dirichlet existente. */
   blendFixed(k: number, value: number, w: number): void {
     const nv = this.phiFix[k] * (1 - w) + value * w;
